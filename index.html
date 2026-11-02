@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ready Map</title>
+  <meta name="description" content="Ready Map: a simple map that shows where you are, saves places, finds help nearby, and shows weather warnings.">
+  <meta name="theme-color" content="#E86A17">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://nowcoast.noaa.gov https://api.weather.gov https://api.rainviewer.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Ready Map">
+  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#point-card">Skip to location details</a>
+
+  <header class="app-header">
+    <div class="brand">
+      <svg class="brand-logo" viewBox="0 0 64 64" width="32" height="32" aria-hidden="true" focusable="false">
+        <rect width="64" height="64" rx="12" fill="#E86A17"/>
+        <path fill="#FFFBF7" d="M32 16 48 30h-3v16H19V30h-3z"/>
+        <rect x="29" y="36" width="6" height="10" fill="#E86A17"/>
+      </svg>
+      <h1 class="brand-name">Ready Map</h1>
+    </div>
+    <p id="net-status" class="net-badge net-online" role="status">Online</p>
+  </header>
+
+  <nav class="chips" aria-label="Map tools">
+    <button type="button" id="btn-locate" class="chip chip-primary" aria-pressed="false">Show my location</button>
+    <button type="button" id="btn-follow" class="chip" aria-pressed="false" disabled>Follow me</button>
+    <button type="button" id="btn-weather" class="chip" aria-haspopup="dialog" aria-controls="sheet-weather">Weather</button>
+    <button type="button" id="btn-tools" class="chip chip-menu" aria-haspopup="dialog" aria-expanded="false" aria-controls="sheet-tools">
+      <svg class="chip-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>
+      <span>More tools</span>
+    </button>
+  </nav>
+
+  <div id="status-banner" class="status-banner" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+  <main class="map-wrap">
+    <div id="map" role="region" aria-label="Map. Tap the map to drop a pin."></div>
+    <noscript><p class="noscript">Ready Map needs JavaScript turned on.</p></noscript>
+  </main>
+
+  <section id="point-card" class="point-card" aria-labelledby="point-title" tabindex="-1">
+    <p id="point-title" class="point-eyebrow">No point yet</p>
+    <p id="coords-decimal" class="coords coords-decimal">No point yet</p>
+    <p id="coords-dms" class="coords coords-dms">Tap the map or tap Show my location.</p>
+    <p id="coords-accuracy" class="coords-accuracy" hidden></p>
+    <div class="point-actions">
+      <button type="button" id="btn-copy" class="btn" disabled>Copy</button>
+      <button type="button" id="btn-share" class="btn" disabled>Share</button>
+      <button type="button" id="btn-more" class="btn" aria-expanded="false" aria-controls="sheet-more" disabled>More</button>
+    </div>
+  </section>
+
+  <footer class="emergency" aria-label="Emergency">
+    <a id="btn-call" class="btn btn-danger" href="tel:911">Call 911</a>
+    <button type="button" id="btn-share-location" class="btn btn-primary">Share my location</button>
+  </footer>
+
+  <!-- Backdrop for modal sheets -->
+  <div id="backdrop" class="backdrop" hidden></div>
+
+  <!-- More tools menu (secondary tools) -->
+  <section id="sheet-tools" class="sheet sheet-small" role="dialog" aria-modal="true" aria-labelledby="tools-title" hidden>
+    <div class="sheet-head">
+      <h2 id="tools-title">More tools</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close more tools">Close</button>
+    </div>
+    <div class="sheet-body">
+      <ul class="tool-list">
+        <li><button type="button" id="btn-places" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-places">My places <span class="tool-sub">Saved pins and GPX</span></button></li>
+        <li><button type="button" id="btn-compass" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-compass">Compass <span class="tool-sub">Which way is north</span></button></li>
+        <li><button type="button" id="btn-save-area" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-save">Offline map <span class="tool-sub">Use the map without signal</span></button></li>
+        <li><button type="button" id="btn-about" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-about">About and privacy <span class="tool-sub">Help, credits, links for bots</span></button></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- More: details for the selected point -->
+  <section id="sheet-more" class="sheet" role="dialog" aria-modal="true" aria-labelledby="more-title" hidden>
+    <div class="sheet-head">
+      <h2 id="more-title">This spot</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close this spot panel">Close</button>
+    </div>
+    <div class="sheet-body">
+      <h3>Directions</h3>
+      <div class="btn-row">
+        <a id="link-google-dir" class="btn" href="#" target="_blank" rel="noopener noreferrer">Google Maps</a>
+        <a id="link-apple-dir" class="btn" href="#" target="_blank" rel="noopener noreferrer">Apple Maps</a>
+      </div>
+
+      <h3>Save this place</h3>
+      <form id="form-save-place" class="save-form" novalidate>
+        <label for="place-name">Place name</label>
+        <input id="place-name" name="place-name" type="text" maxlength="60" autocomplete="off" placeholder="For example: Meeting spot">
+        <button type="submit" id="btn-save-place" class="btn btn-primary">Save place</button>
+      </form>
+
+      <h3>Link to this spot</h3>
+      <p class="hint">Copy a Ready Map link that opens right here.</p>
+      <button type="button" id="btn-copy-link" class="btn">Copy link</button>
+
+      <h3>Find nearby</h3>
+      <p class="hint">Pick what you need. We open Google or Apple Maps, or show it on this map.</p>
+      <div class="btn-grid" id="nearby-buttons">
+        <button type="button" class="btn" data-nearby="hospital">Hospital</button>
+        <button type="button" class="btn" data-nearby="shelter">Shelter</button>
+        <button type="button" class="btn" data-nearby="police">Police</button>
+        <button type="button" class="btn" data-nearby="fire">Fire station</button>
+        <button type="button" class="btn" data-nearby="gas">Gas</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Nearby results -->
+  <section id="sheet-nearby" class="sheet" role="dialog" aria-modal="true" aria-labelledby="nearby-title" hidden>
+    <div class="sheet-head">
+      <h2 id="nearby-title">Nearby</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close nearby panel">Close</button>
+    </div>
+    <div class="sheet-body">
+      <div class="btn-row">
+        <a id="link-google-search" class="btn" href="#" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>
+        <a id="link-apple-search" class="btn" href="#" target="_blank" rel="noopener noreferrer">Open in Apple Maps</a>
+      </div>
+      <button type="button" id="btn-nearby-show" class="btn btn-primary btn-wide">Show on this map</button>
+      <p id="nearby-status" class="sheet-status" role="status" aria-live="polite"></p>
+      <ol id="nearby-list" class="result-list"></ol>
+      <p class="fine">Map data from OpenStreetMap (Overpass API). It may be missing places. In an emergency, call 911.</p>
+    </div>
+  </section>
+
+  <!-- My places -->
+  <section id="sheet-places" class="sheet" role="dialog" aria-modal="true" aria-labelledby="places-title" hidden>
+    <div class="sheet-head">
+      <h2 id="places-title">My places</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close my places">Close</button>
+    </div>
+    <div class="sheet-body">
+      <p id="places-empty" class="hint">You have no saved places yet. Tap the map, then save the pin.</p>
+      <ul id="places-list" class="place-list"></ul>
+      <button type="button" id="btn-gpx" class="btn btn-wide">Download GPX</button>
+      <p class="fine">Places stay on this device only. GPX files open in most map and GPS apps.</p>
+    </div>
+  </section>
+
+  <!-- Delete confirm -->
+  <section id="sheet-confirm" class="sheet sheet-small" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-name" hidden>
+    <div class="sheet-head">
+      <h2 id="confirm-title">Delete this place?</h2>
+    </div>
+    <div class="sheet-body">
+      <p id="confirm-name" class="confirm-name"></p>
+      <div class="btn-row">
+        <button type="button" id="btn-confirm-delete" class="btn btn-danger">Delete</button>
+        <button type="button" id="btn-confirm-keep" class="btn" data-close>Keep</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Compass -->
+  <section id="sheet-compass" class="sheet sheet-small" role="dialog" aria-modal="true" aria-labelledby="compass-title" hidden>
+    <div class="sheet-head">
+      <h2 id="compass-title">Compass</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close compass">Close</button>
+    </div>
+    <div class="sheet-body compass-body">
+      <div class="compass-dial" aria-hidden="true">
+        <span class="dial-n">N</span>
+        <svg id="compass-arrow" class="compass-arrow" viewBox="0 0 100 100" width="160" height="160" focusable="false">
+          <polygon points="50,6 64,54 50,46 36,54" fill="#9F1239"/>
+          <polygon points="50,94 36,54 50,46 64,54" fill="#44403C"/>
+        </svg>
+      </div>
+      <p id="compass-reading" class="compass-reading" aria-live="polite">Waiting for compass…</p>
+      <p class="hint">Hold your phone flat. Keep it away from metal and magnets. The arrow points north.</p>
+      <button type="button" id="btn-compass-stop" class="btn btn-wide">Stop compass</button>
+    </div>
+  </section>
+
+  <!-- Offline map helper (no prefetch: the OSM tile policy does not allow it) -->
+  <section id="sheet-save" class="sheet sheet-small" role="dialog" aria-modal="true" aria-labelledby="save-title" hidden>
+    <div class="sheet-head">
+      <h2 id="save-title">Offline map</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close offline map">Close</button>
+    </div>
+    <div class="sheet-body">
+      <p id="save-info">The map keeps the parts you have already looked at (up to 500 map pieces). They still show when you have no signal.</p>
+      <h3>To keep an area</h3>
+      <ol class="steps">
+        <li>While you have signal, move the map to the area.</li>
+        <li>Zoom in and out to each level you will need, and look around.</li>
+        <li>That is it. Those parts are now saved on this phone.</li>
+      </ol>
+      <p id="save-count" class="sheet-status" role="status" aria-live="polite"></p>
+      <button type="button" id="btn-save-clear" class="btn btn-wide">Clear saved map</button>
+      <p id="save-status" class="sheet-status" role="status" aria-live="polite"></p>
+      <p class="fine">Map pieces come from OpenStreetMap. Their rules do not allow downloading whole areas ahead of time, so the app only keeps what you view. Old pieces are removed first when it is full. Weather layers are never saved.</p>
+    </div>
+  </section>
+
+  <!-- Weather (non-modal so the map stays usable) -->
+  <section id="sheet-weather" class="sheet sheet-weather" role="dialog" aria-modal="false" aria-labelledby="weather-title" hidden>
+    <div class="sheet-head">
+      <h2 id="weather-title">Weather</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close weather">Close</button>
+    </div>
+    <div class="sheet-body">
+      <p class="hint">Turn on a layer to see it on the map. Nothing loads until you turn it on.</p>
+      <p id="weather-net" class="sheet-status" role="status" aria-live="polite"></p>
+
+      <!-- Radar -->
+      <div class="wx-layer" id="wx-radar">
+        <div class="wx-row">
+          <button type="button" id="toggle-radar" class="toggle" role="switch" aria-checked="false">
+            <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">Rain radar</span>
+          </button>
+        </div>
+        <p class="wx-time">Data from: <span id="time-radar">Off</span></p>
+        <p id="radar-note" class="wx-note" role="status" aria-live="polite"></p>
+        <div class="wx-controls">
+          <label for="opacity-radar">Radar see-through level</label>
+          <input id="opacity-radar" type="range" min="10" max="100" step="5" value="70" aria-describedby="opacity-radar-val">
+          <output id="opacity-radar-val" for="opacity-radar">70%</output>
+        </div>
+        <div class="wx-loop">
+          <button type="button" id="btn-radar-play" class="btn" aria-pressed="false" disabled>Play loop</button>
+          <span id="radar-frame-time" class="frame-time" aria-live="off"></span>
+        </div>
+        <details class="legend">
+          <summary>Legend: rain radar</summary>
+          <div class="legend-scale" aria-hidden="true">
+            <span style="background:#04e9e7"></span><span style="background:#019ff4"></span><span style="background:#02fd02"></span><span style="background:#01c501"></span><span style="background:#fdf802"></span><span style="background:#fd9500"></span><span style="background:#fd0000"></span><span style="background:#bc0000"></span><span style="background:#f800fd"></span>
+          </div>
+          <p class="legend-text">Light rain (blue, green) → heavy rain (yellow, orange) → very heavy rain or hail (red, purple).</p>
+          <img id="legend-radar" class="legend-img" alt="Radar color key from NOAA, in dBZ (rain strength)" loading="lazy" hidden>
+        </details>
+      </div>
+
+      <!-- Satellite -->
+      <div class="wx-layer" id="wx-satellite">
+        <div class="wx-row">
+          <button type="button" id="toggle-satellite" class="toggle" role="switch" aria-checked="false">
+            <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">Clouds (satellite)</span>
+          </button>
+        </div>
+        <p class="wx-time">Data from: <span id="time-satellite">Off</span></p>
+        <p id="satellite-note" class="wx-note" role="status" aria-live="polite"></p>
+        <fieldset class="seg">
+          <legend>Picture type</legend>
+          <label><input type="radio" name="sat-kind" value="goes_longwave_imagery" checked> Night and day (infrared)</label>
+          <label><input type="radio" name="sat-kind" value="goes_visible_imagery"> Daytime (visible)</label>
+        </fieldset>
+        <div class="wx-controls">
+          <label for="opacity-satellite">Clouds see-through level</label>
+          <input id="opacity-satellite" type="range" min="10" max="100" step="5" value="60" aria-describedby="opacity-satellite-val">
+          <output id="opacity-satellite-val" for="opacity-satellite">60%</output>
+        </div>
+        <details class="legend">
+          <summary>Legend: clouds</summary>
+          <p class="legend-text">Bright white = cold high clouds, can mean storms. Gray = lower, warmer clouds. Dark = clear sky.</p>
+          <img id="legend-satellite" class="legend-img" alt="Satellite color key from NOAA" loading="lazy" hidden>
+        </details>
+      </div>
+
+      <!-- Alerts -->
+      <div class="wx-layer" id="wx-alerts">
+        <div class="wx-row">
+          <button type="button" id="toggle-alerts" class="toggle" role="switch" aria-checked="false">
+            <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">Weather warnings</span>
+          </button>
+          <button type="button" id="btn-alerts-refresh" class="btn btn-small" disabled>Refresh</button>
+        </div>
+        <p class="wx-time">Data from: <span id="time-alerts">Off</span></p>
+        <p id="alerts-note" class="wx-note" role="status" aria-live="polite"></p>
+        <label class="check"><input type="checkbox" id="alerts-state" disabled> Show warnings for my whole state<span id="alerts-state-code"></span></label>
+        <div class="wx-controls">
+          <label for="opacity-alerts">Warnings see-through level</label>
+          <input id="opacity-alerts" type="range" min="10" max="100" step="5" value="45" aria-describedby="opacity-alerts-val">
+          <output id="opacity-alerts-val" for="opacity-alerts">45%</output>
+        </div>
+        <ul id="alerts-list" class="alert-list" aria-label="Active warnings"></ul>
+        <details class="legend">
+          <summary>Legend: warnings</summary>
+          <ul class="sev-legend">
+            <li><span class="sev-swatch" style="background:#7b1fa2"></span> Extreme: danger to life</li>
+            <li><span class="sev-swatch" style="background:#d32f2f"></span> Severe</li>
+            <li><span class="sev-swatch" style="background:#f57c00"></span> Moderate</li>
+            <li><span class="sev-swatch" style="background:#fbc02d"></span> Minor</li>
+            <li><span class="sev-swatch" style="background:#607d8b"></span> Unknown</li>
+          </ul>
+          <p class="legend-text">Tap a colored area on the map to read the warning.</p>
+        </details>
+      </div>
+      <p class="fine">Weather from NOAA / National Weather Service. Backup radar from RainViewer. Always follow local officials.</p>
+    </div>
+  </section>
+
+  <!-- Single alert detail -->
+  <section id="sheet-alert" class="sheet" role="dialog" aria-modal="true" aria-labelledby="alert-event" hidden>
+    <div class="sheet-head">
+      <h2 id="alert-event">Warning</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close warning">Close</button>
+    </div>
+    <div class="sheet-body">
+      <p id="alert-severity" class="alert-sev"></p>
+      <p id="alert-headline" class="alert-headline"></p>
+      <p><strong>Where:</strong> <span id="alert-area"></span></p>
+      <p><strong>Ends:</strong> <span id="alert-ends"></span></p>
+      <h3>What to do</h3>
+      <p id="alert-instruction" class="pre"></p>
+      <button type="button" id="btn-alert-more" class="btn" aria-expanded="false" aria-controls="alert-description">More</button>
+      <p id="alert-description" class="pre" hidden></p>
+      <p id="alert-sender" class="fine"></p>
+    </div>
+  </section>
+
+  <!-- About -->
+  <section id="sheet-about" class="sheet" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+    <div class="sheet-head">
+      <h2 id="about-title">About Ready Map</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close about">Close</button>
+    </div>
+    <div class="sheet-body about">
+      <p>Ready Map is part of <strong>Ready</strong>, an emergency-prep helper. It shows where you are, lets you save places, finds help nearby, and shows weather warnings.</p>
+
+      <h3>Your privacy</h3>
+      <ul>
+        <li>No tracking. No ads. No analytics. No cookies.</li>
+        <li>Your GPS location and your saved places are stored only on this device. There is no Ready Map server, so nothing is sent to us.</li>
+        <li>Two features send a spot to an outside service, and only when you use them:
+          "Show on this map" (nearby places) sends that spot's coordinates to the Overpass API, and
+          "Weather warnings" sends your location (or the map center) to the National Weather Service.</li>
+        <li>The app only talks to these services:
+          <ul>
+            <li>OpenStreetMap, for map pictures (tiles).</li>
+            <li>Overpass API, only when you tap "Show on this map" for nearby places.</li>
+            <li>NOAA / National Weather Service, only when you turn on a weather layer.</li>
+            <li>RainViewer, only if NOAA radar does not work.</li>
+            <li>Google Maps or Apple Maps, only when you tap one of those links.</li>
+          </ul>
+        </li>
+        <li>When you use those services, they can see a map area or spot, like any website.</li>
+      </ul>
+
+      <h3>GPS needs a secure page</h3>
+      <p>Phones only share GPS with pages that start with <code>https://</code> (or <code>localhost</code> for testing).</p>
+
+      <h3>For bots: link to a spot</h3>
+      <p>Add these to the link: <code>lat</code>, <code>lon</code>, and if you want, <code>label</code> and <code>zoom</code> (1 to 19).</p>
+      <p><code id="about-example" class="break">./?lat=40.7608&amp;lon=-111.891&amp;label=Meeting%20spot&amp;zoom=15</code></p>
+
+      <h3>Offline map</h3>
+      <p>The map keeps the parts you have already looked at (up to 500 map pieces), so they still show without signal. To keep an area, look around it now at the zoom levels you need. The app does not download areas ahead of time. To free up space:</p>
+      <button type="button" id="btn-clear-map" class="btn">Clear saved map</button>
+      <p id="clear-status" class="sheet-status" role="status" aria-live="polite"></p>
+
+      <h3>Credits</h3>
+      <ul>
+        <li>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>, ODbL license.</li>
+        <li>Map library: <a href="https://leafletjs.com/" target="_blank" rel="noopener noreferrer">Leaflet</a> 1.9.4, BSD 2-Clause license (<a href="./vendor/leaflet/LICENSE" target="_blank" rel="noopener">license text</a>).</li>
+        <li>Weather: NOAA / National Weather Service (nowCOAST and api.weather.gov), public domain.</li>
+        <li>Backup radar: RainViewer.</li>
+      </ul>
+      <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
+      <p class="fine">Version <span id="app-version">1.1.0</span>. In an emergency, call 911.</p>
+    </div>
+  </section>
+
+  <textarea id="copy-fallback" class="visually-hidden" aria-hidden="true" tabindex="-1" readonly></textarea>
+
+  <script src="./vendor/leaflet/leaflet.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
