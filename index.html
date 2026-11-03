@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Ready Map</title>
-  <meta name="description" content="Ready Map: a simple map that shows where you are, saves places, finds help nearby, and shows weather warnings.">
+  <meta name="description" content="Ready Map: a simple map for anywhere in the world. It shows where you are, saves places, finds help nearby, and shows rain radar, clouds, disaster alerts and ocean layers.">
   <meta name="theme-color" content="#E86A17">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://nowcoast.noaa.gov https://api.weather.gov https://api.rainviewer.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -54,8 +54,8 @@
     <p id="coords-dms" class="coords coords-dms">Tap the map or tap Show my location.</p>
     <p id="coords-accuracy" class="coords-accuracy" hidden></p>
     <div class="point-actions">
-      <button type="button" id="btn-copy" class="btn" disabled>Copy</button>
-      <button type="button" id="btn-share" class="btn" disabled>Share</button>
+      <button type="button" id="btn-copy" class="btn">Copy</button>
+      <button type="button" id="btn-share" class="btn">Share</button>
       <button type="button" id="btn-more" class="btn" aria-expanded="false" aria-controls="sheet-more" disabled>More</button>
     </div>
   </section>
@@ -203,7 +203,7 @@
       <p id="save-count" class="sheet-status" role="status" aria-live="polite"></p>
       <button type="button" id="btn-save-clear" class="btn btn-wide">Clear saved map</button>
       <p id="save-status" class="sheet-status" role="status" aria-live="polite"></p>
-      <p class="fine">Map pieces come from OpenStreetMap. Their rules do not allow downloading whole areas ahead of time, so the app only keeps what you view. Old pieces are removed first when it is full. Weather layers are never saved.</p>
+      <p class="fine">Map pieces come from OpenStreetMap. Their rules do not allow downloading whole areas ahead of time, so the app only keeps what you view. Old pieces are removed first when it is full. Weather and ocean layers are never saved.</p>
     </div>
   </section>
 
@@ -214,7 +214,10 @@
       <button type="button" class="sheet-close" data-close aria-label="Close weather">Close</button>
     </div>
     <div class="sheet-body">
+      <button type="button" id="btn-localwx" class="btn btn-wide news-open" aria-haspopup="dialog" aria-controls="sheet-localwx">Local weather <span class="tool-sub">Now, next 24 hours and 7 days for your spot</span></button>
+      <p id="weather-coverage" class="hint hint-strong">Layers marked U.S. only work in the United States; World layers work everywhere.</p>
       <p class="hint">Turn on a layer to see it on the map. Nothing loads until you turn it on.</p>
+      <button type="button" id="btn-news" class="btn btn-wide news-open" aria-haspopup="dialog" aria-controls="sheet-news">Weather news <span class="tool-sub">Latest official news for the map area</span></button>
       <p id="weather-net" class="sheet-status" role="status" aria-live="polite"></p>
 
       <!-- Radar -->
@@ -222,11 +225,18 @@
         <div class="wx-row">
           <button type="button" id="toggle-radar" class="toggle" role="switch" aria-checked="false">
             <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-            <span class="toggle-label">Rain radar</span>
+            <span class="toggle-label">Rain radar (World)</span>
           </button>
         </div>
         <p class="wx-time">Data from: <span id="time-radar">Off</span></p>
         <p id="radar-note" class="wx-note" role="status" aria-live="polite"></p>
+        <fieldset class="seg">
+          <legend>Which radar</legend>
+          <label><input type="radio" name="radar-area" value="auto" checked> Automatic: U.S. radar in the U.S., world radar elsewhere</label>
+          <label><input type="radio" name="radar-area" value="us"> U.S. only (NOAA, more detail)</label>
+          <label><input type="radio" name="radar-area" value="world"> World (RainViewer)</label>
+        </fieldset>
+        <p class="hint">World radar is less detailed when you zoom in close (it stops at zoom level 7).</p>
         <div class="wx-controls">
           <label for="opacity-radar">Radar see-through level</label>
           <input id="opacity-radar" type="range" min="10" max="100" step="5" value="70" aria-describedby="opacity-radar-val">
@@ -251,15 +261,17 @@
         <div class="wx-row">
           <button type="button" id="toggle-satellite" class="toggle" role="switch" aria-checked="false">
             <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-            <span class="toggle-label">Clouds (satellite)</span>
+            <span class="toggle-label">Clouds (satellite, World)</span>
           </button>
         </div>
         <p class="wx-time">Data from: <span id="time-satellite">Off</span></p>
         <p id="satellite-note" class="wx-note" role="status" aria-live="polite"></p>
         <fieldset class="seg">
           <legend>Picture type</legend>
-          <label><input type="radio" name="sat-kind" value="goes_longwave_imagery" checked> Night and day (infrared)</label>
-          <label><input type="radio" name="sat-kind" value="goes_visible_imagery"> Daytime (visible)</label>
+          <label><input type="radio" name="sat-kind" value="goes_longwave_imagery" checked> Americas - night and day (infrared, sharper)</label>
+          <label><input type="radio" name="sat-kind" value="goes_visible_imagery"> Americas - daytime (visible, sharper)</label>
+          <label><input type="radio" name="sat-kind" value="global_longwave_imagery_mosaic"> World - night and day (infrared)</label>
+          <label><input type="radio" name="sat-kind" value="global_visible_imagery_mosaic"> World - daytime (visible)</label>
         </fieldset>
         <div class="wx-controls">
           <label for="opacity-satellite">Clouds see-through level</label>
@@ -269,6 +281,7 @@
         <details class="legend">
           <summary>Legend: clouds</summary>
           <p class="legend-text">Bright white = cold high clouds, can mean storms. Gray = lower, warmer clouds. Dark = clear sky.</p>
+          <p id="satellite-source" class="legend-text">Americas pictures: NOAA GOES satellites. They cover North and South America and are updated every few minutes.</p>
           <img id="legend-satellite" class="legend-img" alt="Satellite color key from NOAA" loading="lazy" hidden>
         </details>
       </div>
@@ -278,7 +291,7 @@
         <div class="wx-row">
           <button type="button" id="toggle-alerts" class="toggle" role="switch" aria-checked="false">
             <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-            <span class="toggle-label">Weather warnings</span>
+            <span class="toggle-label">Weather warnings (U.S. only)</span>
           </button>
           <button type="button" id="btn-alerts-refresh" class="btn btn-small" disabled>Refresh</button>
         </div>
@@ -300,10 +313,251 @@
             <li><span class="sev-swatch" style="background:#fbc02d"></span> Minor</li>
             <li><span class="sev-swatch" style="background:#607d8b"></span> Unknown</li>
           </ul>
-          <p class="legend-text">Tap a colored area on the map to read the warning.</p>
+          <p class="legend-text">Tap a colored area on the map to read the warning. Outside the U.S., use World disaster alerts.</p>
         </details>
       </div>
-      <p class="fine">Weather from NOAA / National Weather Service. Backup radar from RainViewer. Always follow local officials.</p>
+
+      <!-- World disaster alerts (GDACS) -->
+      <div class="wx-layer" id="wx-gdacs">
+        <div class="wx-row">
+          <button type="button" id="toggle-gdacs" class="toggle" role="switch" aria-checked="false">
+            <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">World disaster alerts</span>
+          </button>
+          <button type="button" id="btn-gdacs-refresh" class="btn btn-small" disabled>Refresh</button>
+        </div>
+        <p class="wx-time">Data from: <span id="time-gdacs">Off</span></p>
+        <p id="gdacs-note" class="wx-note" role="status" aria-live="polite"></p>
+        <div class="wx-controls">
+          <label for="opacity-gdacs">Disaster alerts see-through level</label>
+          <input id="opacity-gdacs" type="range" min="10" max="100" step="5" value="90" aria-describedby="opacity-gdacs-val">
+          <output id="opacity-gdacs-val" for="opacity-gdacs">90%</output>
+        </div>
+        <ul id="gdacs-list" class="alert-list" aria-label="Disaster alerts nearest the map center"></ul>
+        <details class="legend" id="legend-gdacs">
+          <summary>Legend: world disaster alerts</summary>
+          <ul class="sev-legend">
+            <li><span class="gdacs-dot gdacs-red" aria-hidden="true">R</span> Red: big impact likely, people may need help</li>
+            <li><span class="gdacs-dot gdacs-orange" aria-hidden="true">O</span> Orange: some impact likely</li>
+            <li><span class="gdacs-dot gdacs-green" aria-hidden="true">G</span> Green: small impact likely</li>
+          </ul>
+          <p class="legend-text">Kinds: earthquake, tropical storm (hurricane, typhoon), flood, volcano, drought and wildfire. Tap a dot to read more. The list shows the 10 alerts nearest the center of the map.</p>
+          <p class="legend-text">From GDACS (Global Disaster Alert and Coordination System, by the European Union and the United Nations). Always follow local officials.</p>
+        </details>
+      </div>
+
+      <!-- Ocean -->
+      <div class="wx-group" role="group" aria-labelledby="ocean-title">
+        <h3 id="ocean-title" class="wx-group-title">Ocean</h3>
+        <p class="hint">Water layers for the coast, the sea and the Great Lakes. Each name says where it works.</p>
+
+        <!-- Ocean currents -->
+        <div class="wx-layer" id="wx-currents">
+          <div class="wx-row">
+            <button type="button" id="toggle-currents" class="toggle" role="switch" aria-checked="false">
+              <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label">Ocean currents (U.S. waters and Great Lakes)</span>
+            </button>
+          </div>
+          <p class="wx-time">Data from: <span id="time-currents">Off</span></p>
+          <p id="currents-note" class="wx-note" role="status" aria-live="polite"></p>
+          <div class="wx-controls">
+            <label for="opacity-currents">Currents see-through level</label>
+            <input id="opacity-currents" type="range" min="10" max="100" step="5" value="70" aria-describedby="opacity-currents-val">
+            <output id="opacity-currents-val" for="opacity-currents">70%</output>
+          </div>
+          <details class="legend" id="legend-currents">
+            <summary>Legend: ocean currents</summary>
+            <div class="legend-bar" aria-hidden="true" style="background:linear-gradient(to right,#000004 0%,#140E36 8.3%,#390F6E 16.7%,#621980 25%,#892881 33.3%,#B2357B 41.7%,#D9466B 50%,#F4695C 58.3%,#FD9869 66.7%,#FEC68A 75%,#FCF4B6 83.3%,#FCFDBF 100%)"></div>
+            <div class="legend-ticks" aria-hidden="true">
+              <span style="left:0%">0</span><span style="left:16.7%">0.5</span><span style="left:33.3%">1</span><span style="left:66.7%">2</span><span style="left:100%">3+ knots</span>
+            </div>
+            <p class="legend-text">How fast the water moves, in knots (1 knot is about 1.15 mph). Dark = slow. Purple, red, orange = faster. Pale yellow = very fast (3 knots or more).</p>
+            <p class="legend-text">This is a computer model guess for the water near the top (about 15 feet down), not a measurement.</p>
+          </details>
+        </div>
+
+        <!-- Sea temperature -->
+        <div class="wx-layer" id="wx-sst">
+          <div class="wx-row">
+            <button type="button" id="toggle-sst" class="toggle" role="switch" aria-checked="false">
+              <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label">Sea temperature (worldwide)</span>
+            </button>
+          </div>
+          <p class="wx-time">Data from: <span id="time-sst">Off</span></p>
+          <p id="sst-note" class="wx-note" role="status" aria-live="polite"></p>
+          <div class="wx-controls">
+            <label for="opacity-sst">Sea temperature see-through level</label>
+            <input id="opacity-sst" type="range" min="10" max="100" step="5" value="60" aria-describedby="opacity-sst-val">
+            <output id="opacity-sst-val" for="opacity-sst">60%</output>
+          </div>
+          <details class="legend" id="legend-sst">
+            <summary>Legend: sea temperature</summary>
+            <div class="legend-bar" aria-hidden="true" style="background:linear-gradient(to right,#0000FF 0%,#0000FF 1.7%,#2432FF 5.0%,#3355FF 8.3%,#3870FF 11.7%,#3B93FF 15.0%,#36B5FF 18.3%,#29DBFF 21.7%,#00FFFF 25.0%,#29F2DB 28.3%,#37E6B4 31.7%,#3FD991 35.0%,#41CC70 38.3%,#41BF50 41.7%,#3CB22E 45.0%,#38A800 48.3%,#50B200 51.7%,#6CBF00 55.0%,#88CC00 58.3%,#A6D900 61.7%,#C3E600 65.0%,#E2F200 68.3%,#FFFF00 71.7%,#FFF200 75.0%,#FFE600 78.3%,#FFD900 81.7%,#FFD000 85.0%,#FFC400 88.3%,#FFB700 91.7%,#FFAA00 95.0%,#FC9700 98.3%,#FC9700 100%)"></div>
+            <p class="visually-hidden">Scale from 28°F (minus 2°C) on the left to 88°F (31°C) on the right. Marks: 28, 40, 50, 60, 70 and 88°F; minus 2, 10, 20 and 31°C.</p>
+            <div class="legend-ticks" aria-hidden="true">
+              <span style="left:0%">28°F</span><span style="left:20%">40°F</span><span style="left:36.7%">50°F</span><span style="left:53.3%">60°F</span><span style="left:70%">70°F</span><span style="left:100%">88°F</span>
+            </div>
+            <div class="legend-ticks" aria-hidden="true">
+              <span style="left:0%">−2°C</span><span style="left:36.7%">10°C</span><span style="left:66.7%">20°C</span><span style="left:100%">31°C</span>
+            </div>
+            <p class="legend-text">Water temperature at the top of the sea and the Great Lakes, from 28°F (−2°C) to 88°F (31°C). Deep blue = near freezing (32°F is 0°C). Light blue = cold, green = cool, yellow and orange = warm. Purple or pink = colder than 28°F. Red = warmer than 88°F.</p>
+            <p class="legend-text">From satellites, mixed over the last 7 days (NASA SPoRT, shared by NOAA nowCOAST).</p>
+          </details>
+        </div>
+
+        <!-- Depth lines -->
+        <div class="wx-layer" id="wx-depth">
+          <div class="wx-row">
+            <button type="button" id="toggle-depth" class="toggle" role="switch" aria-checked="false">
+              <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label">Depth lines (U.S. and Great Lakes)</span>
+            </button>
+          </div>
+          <p class="wx-time">Data from: <span id="time-depth">Off</span></p>
+          <p id="depth-note" class="wx-note" role="status" aria-live="polite"></p>
+          <div class="wx-controls">
+            <label for="opacity-depth">Depth lines see-through level</label>
+            <input id="opacity-depth" type="range" min="10" max="100" step="5" value="80" aria-describedby="opacity-depth-val">
+            <output id="opacity-depth-val" for="opacity-depth">80%</output>
+          </div>
+          <details class="legend" id="legend-depth">
+            <summary>Legend: depth lines</summary>
+            <ul class="sev-legend">
+              <li><span class="sev-swatch" style="background:#ffffff"></span> Deep water</li>
+              <li><span class="sev-swatch" style="background:#b9d7ea"></span> Shallow water</li>
+              <li><span class="sev-swatch" style="background:linear-gradient(#fff 45%,#666 45%,#666 60%,#fff 60%)"></span> Line of the same depth</li>
+            </ul>
+            <p class="legend-text">Numbers on the lines are depths in <strong>feet</strong>. For example 656 ft = 200 m, 3280 ft = 1000 m. From official NOAA charts of U.S. coasts and the Great Lakes.</p>
+            <p class="legend-text"><strong>Not for navigation. Use official charts.</strong></p>
+          </details>
+        </div>
+
+        <!-- Marine zones -->
+        <div class="wx-layer" id="wx-marinezones">
+          <div class="wx-row">
+            <button type="button" id="toggle-marinezones" class="toggle" role="switch" aria-checked="false">
+              <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label">Marine zones (U.S. only)</span>
+            </button>
+          </div>
+          <p class="wx-time">Data from: <span id="time-marinezones">Off</span></p>
+          <p id="marinezones-note" class="wx-note" role="status" aria-live="polite"></p>
+          <div class="wx-controls">
+            <label for="opacity-marinezones">Marine zones see-through level</label>
+            <input id="opacity-marinezones" type="range" min="10" max="100" step="5" value="90" aria-describedby="opacity-marinezones-val">
+            <output id="opacity-marinezones-val" for="opacity-marinezones">90%</output>
+          </div>
+          <details class="legend" id="legend-marinezones">
+            <summary>Legend: marine zones</summary>
+            <ul class="sev-legend">
+              <li><span class="sev-swatch" style="background:linear-gradient(#fff 40%,#3b6fd8 40%,#3b6fd8 60%,#fff 60%)"></span> Edge of an NWS marine forecast zone, with its name (like PZZ830)</li>
+            </ul>
+            <p class="legend-text">NWS marine forecast zones. Marine warnings for these zones show in the Weather warnings layer.</p>
+            <p class="legend-text"><a href="https://www.weather.gov/marine/" target="_blank" rel="noopener noreferrer">Marine forecast</a> (weather.gov)</p>
+          </details>
+        </div>
+
+        <!-- World currents (NOAA CoastWatch, ERDDAP) -->
+        <div class="wx-layer" id="wx-worldcurrents">
+          <div class="wx-row">
+            <button type="button" id="toggle-worldcurrents" class="toggle" role="switch" aria-checked="false">
+              <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label">World currents</span>
+            </button>
+          </div>
+          <p class="wx-time">Data from: <span id="time-worldcurrents">Off</span></p>
+          <p id="worldcurrents-note" class="wx-note" role="status" aria-live="polite"></p>
+          <div class="wx-controls">
+            <label for="opacity-worldcurrents">World currents see-through level</label>
+            <input id="opacity-worldcurrents" type="range" min="10" max="100" step="5" value="90" aria-describedby="opacity-worldcurrents-val">
+            <output id="opacity-worldcurrents-val" for="opacity-worldcurrents">90%</output>
+          </div>
+          <details class="legend" id="legend-worldcurrents">
+            <summary>Legend: world currents</summary>
+            <ul class="sev-legend">
+              <li><span class="legend-arrow" aria-hidden="true">→</span> Arrows point where the water flows. Longer arrow = faster water.</li>
+            </ul>
+            <p class="legend-text">1 meter per second is about 2 knots (2.2 mph). Updated once a day.</p>
+            <p class="legend-text">This is an estimate from satellites that measure the height of the sea. It leaves out tides and wind push near the shore. Pictures can be slow to load.</p>
+            <p class="legend-text"><strong>Not for navigation.</strong></p>
+          </details>
+        </div>
+
+        <!-- World sea depth (GEBCO) -->
+        <div class="wx-layer" id="wx-worlddepth">
+          <div class="wx-row">
+            <button type="button" id="toggle-worlddepth" class="toggle" role="switch" aria-checked="false">
+              <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label">World sea depth</span>
+            </button>
+          </div>
+          <p class="wx-time">Data from: <span id="time-worlddepth">Off</span></p>
+          <p id="worlddepth-note" class="wx-note" role="status" aria-live="polite"></p>
+          <div class="wx-controls">
+            <label for="opacity-worlddepth">World sea depth see-through level</label>
+            <input id="opacity-worlddepth" type="range" min="10" max="100" step="5" value="50" aria-describedby="opacity-worlddepth-val">
+            <output id="opacity-worlddepth-val" for="opacity-worlddepth">50%</output>
+          </div>
+          <details class="legend" id="legend-worlddepth">
+            <summary>Legend: world sea depth</summary>
+            <div class="legend-bar" aria-hidden="true" style="background:linear-gradient(to right,#d4ecf7 0%,#9fd0ea 20%,#5fa8d8 45%,#2f6fb3 70%,#16336e 100%)"></div>
+            <div class="legend-ticks" aria-hidden="true">
+              <span style="left:0%">Shallow</span><span style="left:100%">Deep</span>
+            </div>
+            <p class="legend-text">Light blue = shallow water. Dark blue = deep water. Land is shown in green and brown colors.</p>
+            <p class="legend-text">From the GEBCO world map of the sea floor (GEBCO Compilation Group (2024) GEBCO Grid). Covers the whole world.</p>
+            <p class="legend-text"><strong>Not for navigation.</strong></p>
+          </details>
+        </div>
+      </div>
+
+      <p class="fine">Weather from NOAA / National Weather Service. World radar from RainViewer. World clouds from NOAA/NESDIS (GMGSI). World disaster alerts from GDACS. Ocean layers from NOAA nowCOAST, NOAA Office of Coast Survey charts (ENC), the National Weather Service, NOAA CoastWatch and GEBCO. Always follow local officials.</p>
+    </div>
+  </section>
+
+  <!-- Weather news -->
+  <section id="sheet-news" class="sheet" role="dialog" aria-modal="true" aria-labelledby="news-title" hidden>
+    <div class="sheet-head">
+      <h2 id="news-title">Weather news</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close weather news">Close</button>
+    </div>
+    <div class="sheet-body">
+      <p class="hint">Latest news from official weather services for the center of the map. Links open in a new tab.</p>
+      <div class="btn-row">
+        <button type="button" id="news-refresh" class="btn">Refresh</button>
+      </div>
+      <p id="news-status" class="sheet-status" role="status" aria-live="polite"></p>
+      <div id="news-list" class="news-list" aria-label="Weather news"></div>
+      <p class="fine">From the National Weather Service (your local office, the National Hurricane Center and weather.gov) and GDACS. Local office news is for the U.S. only. Always follow local officials.</p>
+    </div>
+  </section>
+
+  <!-- Local weather card -->
+  <section id="sheet-localwx" class="sheet" role="dialog" aria-modal="true" aria-labelledby="localwx-title" hidden>
+    <div class="sheet-head">
+      <h2 id="localwx-title">Local weather</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close local weather">Close</button>
+    </div>
+    <div class="sheet-body localwx">
+      <p id="localwx-place" class="lw-place">Your location</p>
+      <div class="btn-row">
+        <button type="button" id="localwx-refresh" class="btn">Refresh</button>
+      </div>
+      <p id="localwx-status" class="sheet-status" role="status" aria-live="polite"></p>
+      <h3>Right now</h3>
+      <div id="localwx-now" class="lw-now"></div>
+      <h3>Next 24 hours</h3>
+      <p class="hint lw-scroll-hint">Swipe sideways to see more hours.</p>
+      <ul id="localwx-hourly" class="lw-hours" aria-label="Hourly forecast" tabindex="0"></ul>
+      <h3>Next 7 days</h3>
+      <ul id="localwx-daily" class="lw-days" aria-label="7-day forecast"></ul>
+      <h3>Warnings</h3>
+      <div id="localwx-alerts" class="lw-alerts"></div>
+      <p id="localwx-source" class="fine"></p>
+      <p id="localwx-updated" class="fine lw-updated"></p>
+      <p class="fine">Uses your GPS spot when GPS is on. If not, it uses the spot you tapped on the map (or the map center). It updates every 15 minutes while GPS is on. Always follow local officials.</p>
     </div>
   </section>
 
@@ -333,7 +587,7 @@
       <button type="button" class="sheet-close" data-close aria-label="Close about">Close</button>
     </div>
     <div class="sheet-body about">
-      <p>Ready Map is part of <strong>Ready</strong>, an emergency-prep helper. It shows where you are, lets you save places, finds help nearby, and shows weather warnings.</p>
+      <p>Ready Map is part of <strong>Ready</strong>, an emergency-prep helper. It works anywhere in the world. It shows where you are, lets you save places, finds help nearby, and shows rain radar, clouds, warnings, disaster alerts and ocean conditions. Some layers work only in the United States; their names say "U.S. only".</p>
 
       <h3>Your privacy</h3>
       <ul>
@@ -341,13 +595,23 @@
         <li>Your GPS location and your saved places are stored only on this device. There is no Ready Map server, so nothing is sent to us.</li>
         <li>Two features send a spot to an outside service, and only when you use them:
           "Show on this map" (nearby places) sends that spot's coordinates to the Overpass API, and
-          "Weather warnings" sends your location (or the map center) to the National Weather Service.</li>
+          "Weather warnings" sends your location (or the map center) to the National Weather Service.
+          "Weather news" sends the map center to the National Weather Service (api.weather.gov) to find your local weather office.
+          "Local weather" sends one spot (your GPS spot, or the spot you tapped, or the map center) to the National Weather Service (api.weather.gov) in the U.S., or to Open-Meteo (api.open-meteo.com) outside the U.S.</li>
         <li>The app only talks to these services:
           <ul>
             <li>OpenStreetMap, for map pictures (tiles).</li>
             <li>Overpass API, only when you tap "Show on this map" for nearby places.</li>
             <li>NOAA / National Weather Service, only when you turn on a weather layer.</li>
-            <li>RainViewer, only if NOAA radar does not work.</li>
+            <li>NOAA ocean services, only when you turn on an Ocean layer: NOAA nowCOAST (nowcoast.noaa.gov) for currents and sea temperature, NOAA Office of Coast Survey charts (gis.charttools.noaa.gov) for depth lines, and the National Weather Service map server (mapservices.weather.noaa.gov) for marine zones. They see the map area you are looking at.</li>
+            <li>RainViewer, for world radar outside the U.S. (or when you pick World radar), and if NOAA radar does not work.</li>
+            <li>World layers, only when you turn them on. Each one sees only the map area you are looking at, never your GPS spot:
+              NOAA nowCOAST (nowcoast.noaa.gov) for world clouds (NOAA/NESDIS GMGSI),
+              GDACS (www.gdacs.org) for world disaster alerts (it sends the whole world list; the app picks the nearest ones on your phone),
+              NOAA CoastWatch (coastwatch.noaa.gov) for world currents, and
+              GEBCO (wms.gebco.net) for world sea depth.</li>
+            <li>Weather news, only when you open it: api.weather.gov (local office, hurricane and tropical news; it gets the map center), www.weather.gov (national headlines) and GDACS (world list). Nothing about you is sent to weather.gov or GDACS.</li>
+            <li>Local weather, only when you open it (then every 15 minutes while GPS is on): api.weather.gov in the U.S., Open-Meteo (api.open-meteo.com) outside the U.S. It gets that one spot. Outside the U.S. it also gets the GDACS world list. The answer is kept only in memory, never saved on the phone.</li>
             <li>Google Maps or Apple Maps, only when you tap one of those links.</li>
           </ul>
         </li>
@@ -371,10 +635,19 @@
         <li>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>, ODbL license.</li>
         <li>Map library: <a href="https://leafletjs.com/" target="_blank" rel="noopener noreferrer">Leaflet</a> 1.9.4, BSD 2-Clause license (<a href="./vendor/leaflet/LICENSE" target="_blank" rel="noopener">license text</a>).</li>
         <li>Weather: NOAA / National Weather Service (nowCOAST and api.weather.gov), public domain.</li>
-        <li>Backup radar: RainViewer.</li>
+        <li>World and backup radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener noreferrer">RainViewer</a>.</li>
+        <li>World clouds: NOAA/NESDIS Global Mosaic of Geostationary Satellite Imagery (GMGSI), via NOAA nowCOAST. Public domain.</li>
+        <li>World disaster alerts: <a href="https://www.gdacs.org/" target="_blank" rel="noopener noreferrer">GDACS</a> (European Commission Joint Research Centre and UN OCHA).</li>
+        <li>World currents: <a href="https://coastwatch.noaa.gov/" target="_blank" rel="noopener noreferrer">NOAA CoastWatch</a> blended near-real-time geostrophic currents. Not for navigation.</li>
+        <li>World sea depth: <a href="https://www.gebco.net/" target="_blank" rel="noopener noreferrer">GEBCO</a> Compilation Group (2024) GEBCO Grid. Not for navigation.</li>
+        <li>Ocean currents: NOAA nowCOAST (NWS/NCEP Global RTOFS and NOS Great Lakes forecast models). Sea temperature: NASA SPoRT satellite composite via NOAA nowCOAST. Public domain.</li>
+        <li>Depth lines: NOAA Office of Coast Survey electronic nautical charts (ENC). Not for navigation.</li>
+        <li>Marine zones: NOAA / National Weather Service.</li>
+        <li>Weather news: NOAA / National Weather Service (local offices, National Hurricane Center, Central Pacific Hurricane Center) and GDACS.</li>
+        <li>Local weather: NOAA / National Weather Service (api.weather.gov), public domain. Outside the U.S.: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather data by Open-Meteo.com</a>, CC BY 4.0 (free for non-commercial use).</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.1.0</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.2.0</span>. In an emergency, call 911.</p>
     </div>
   </section>
 

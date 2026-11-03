@@ -13,7 +13,8 @@
  *  11. Offline save area
  *  12. Network status + service worker
  *  13. Compass
- *  14. Weather overlays (radar, satellite, warnings)
+ *  14. Weather overlays (radar, satellite, warnings, world disaster alerts) + Ocean layers
+ *      (currents, sea temperature, depth lines, marine zones, world currents, world sea depth)
  *  15. Startup
  */
 (function () {
@@ -22,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.1.0';
+  var VERSION = '1.2.0';
   // Base map tile provider. The OSM tile policy forbids bulk download / prefetch features
   // (https://operations.osmfoundation.org/policies/tiles/), so allowPrefetch is false: the app
   // only keeps tiles the user has actually looked at (the service worker caches them, max 500).
@@ -38,6 +39,13 @@
   var OSM_ATTRIBUTION = TILE_PROVIDER.attribution;
   var NOAA_ATTRIBUTION = 'Weather: <a href="https://www.weather.gov/">NOAA / National Weather Service</a>';
   var RAINVIEWER_ATTRIBUTION = 'Radar fallback: <a href="https://www.rainviewer.com/">RainViewer</a>';
+  var NOWCOAST_OCEAN_ATTRIBUTION = 'Ocean: <a href="https://nowcoast.noaa.gov/">NOAA nowCOAST</a>';
+  var ENC_ATTRIBUTION = 'Depths: <a href="https://nauticalcharts.noaa.gov/">NOAA Office of Coast Survey</a> ENC (not for navigation)';
+  var MARINE_ZONES_ATTRIBUTION = 'Marine zones: <a href="https://www.weather.gov/marine/">National Weather Service</a>';
+  var GMGSI_ATTRIBUTION = 'World clouds: <a href="https://www.nesdis.noaa.gov/">NOAA/NESDIS</a> GMGSI via NOAA nowCOAST';
+  var GDACS_ATTRIBUTION = 'Disaster alerts: <a href="https://www.gdacs.org/">GDACS</a>';
+  var COASTWATCH_ATTRIBUTION = 'World currents: <a href="https://coastwatch.noaa.gov/">NOAA CoastWatch</a> (not for navigation)';
+  var GEBCO_ATTRIBUTION = 'Sea depth: <a href="https://www.gebco.net/">GEBCO Compilation Group (2024) GEBCO Grid</a>';
   // Must match names in sw.js. SAVED_CACHE is the old (1.0.0) prefetch cache; it is only
   // deleted now (sw.js removes it on activate, "Clear saved map" removes it too).
   var SAVED_CACHE = 'ready-map-saved-v1';
@@ -46,7 +54,23 @@
   var PLACES_KEY = 'readyMap.places.v1';
   var DEFAULT_CENTER = [39.8283, -98.5795];
   var DEFAULT_ZOOM = 4;
-  var OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+  // Public Overpass mirrors, tried in order with failover (the last one that worked goes first).
+  var OVERPASS_MIRRORS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+  ];
+  var OVERPASS_MIRROR_KEY = 'readyMap.overpassMirror.v1';
+  var OVERPASS_TIMEOUT_MS = 12000;
+  // The last mirror left to try gets longer: there is nothing to fail over to, and a slow answer
+  // beats none (maps.mail.ru took ~17-22 s for a 2-5 km query in testing).
+  var OVERPASS_LAST_TIMEOUT_MS = 30000;
+  var OVERPASS_SKIP_MS = 5 * 60 * 1000;
+  var NEARBY_STORE_KEY = 'readyMap.nearby.v1';
+  var NEARBY_STORE_MAX = 30;
+  var NEARBY_STORE_TTL = 24 * 3600 * 1000;
+  var NEARBY_RADII = [2000, 5000, 10000];
   var FETCH_TIMEOUT_MS = 15000;
 
   var reduceMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -177,12 +201,19 @@
   function appleDirUrl(lat, lon) {
     return 'https://maps.apple.com/?daddr=' + coordStr(lat) + ',' + coordStr(lon);
   }
+  /** Short coordinate for map-search links (5 decimals, about 1 m). */
+  function searchCoord(n) { return String(Number(Number(n).toFixed(5))); }
+  /**
+   * Google Maps search centred on the point. The coordinates go in the '@lat,lon,zoom' part of the
+   * path, not in the query text (Google misreads 'X near 40.72,-111.85' and can jump to another state).
+   */
   function googleSearchUrl(word, lat, lon) {
-    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(word) +
-      '%20near%20' + coordStr(lat) + ',' + coordStr(lon);
+    return 'https://www.google.com/maps/search/' + encodeURIComponent(String(word)).replace(/%20/g, '+') +
+      '/@' + searchCoord(lat) + ',' + searchCoord(lon) + ',14z';
   }
   function appleSearchUrl(word, lat, lon) {
-    return 'https://maps.apple.com/?q=' + encodeURIComponent(word) + '&sll=' + coordStr(lat) + ',' + coordStr(lon);
+    return 'https://maps.apple.com/?q=' + encodeURIComponent(String(word)) +
+      '&sll=' + searchCoord(lat) + ',' + searchCoord(lon) + '&z=14';
   }
   function googlePointUrl(lat, lon) {
     return 'https://www.google.com/maps/search/?api=1&query=' + coordStr(lat) + ',' + coordStr(lon);
@@ -351,7 +382,8 @@
    * Read the time dimension from WMS GetCapabilities XML.
    * Returns { times:[ISO sorted unique], def: ISO|null }. If layerName is given and found, use that layer.
    */
-  function parseWmsDimension(xmlText, layerName) {
+  function parseWmsDimension(xmlText, layerName, dimName) {
+    var want = String(dimName || 'time').toLowerCase();
     var timeText = null, def = null;
     if (typeof DOMParser !== 'undefined') {
       try {
@@ -366,7 +398,7 @@
                 var kids = names[i].parentNode.children;
                 for (var k = 0; k < kids.length; k++) {
                   if ((kids[k].localName === 'Dimension' || kids[k].localName === 'Extent') &&
-                      String(kids[k].getAttribute('name')).toLowerCase() === 'time') { dim = kids[k]; break; }
+                      String(kids[k].getAttribute('name')).toLowerCase() === want) { dim = kids[k]; break; }
                 }
               }
             }
@@ -374,7 +406,7 @@
           if (!dim) {
             var dims = doc.getElementsByTagName('Dimension');
             for (var j = 0; j < dims.length; j++) {
-              if (String(dims[j].getAttribute('name')).toLowerCase() === 'time') { dim = dims[j]; break; }
+              if (String(dims[j].getAttribute('name')).toLowerCase() === want) { dim = dims[j]; break; }
             }
           }
           if (dim) { timeText = dim.textContent; def = dim.getAttribute('default'); }
@@ -382,7 +414,7 @@
       } catch (e) { /* fall through to regex */ }
     }
     if (timeText === null) {
-      var m = /<Dimension[^>]*name="time"[^>]*>([^<]*)<\/Dimension>/i.exec(String(xmlText));
+      var m = want === 'time' ? /<Dimension[^>]*name="time"[^>]*>([^<]*)<\/Dimension>/i.exec(String(xmlText)) : null;
       if (m) {
         timeText = m[1];
         var dm = /default="([^"]+)"/i.exec(m[0]);
@@ -390,13 +422,175 @@
       }
     }
     var list = expandTimeText(timeText || '');
+    // listed: only the values the server lists (no default added). Time-enabled nowCOAST ocean
+    // layers need one of these exact values; an in-between time gives an empty tile.
+    var listed = Array.from(new Set(list)).sort();
     var defIso = null;
     if (def && !isNaN(Date.parse(def))) {
       defIso = new Date(Date.parse(def)).toISOString();
       list.push(defIso);
     }
     var uniq = Array.from(new Set(list)).sort();
-    return { times: uniq, def: defIso };
+    return { times: uniq, def: defIso, listed: listed };
+  }
+
+  /**
+   * Pick the WMS time to send: the latest listed time that is not in the future (<= nowMs).
+   * If every time is in the future, the one closest to now. Returns the exact string from
+   * the array (never a re-formatted or in-between value), or null if there is none.
+   */
+  function pickWmsTime(times, nowMs) {
+    if (!Array.isArray(times)) return null;
+    var now = Number(nowMs);
+    if (nowMs === undefined || nowMs === null || !isFinite(now)) now = Date.now();
+    var best = null, bestMs = -Infinity, near = null, nearDiff = Infinity;
+    for (var i = 0; i < times.length; i++) {
+      var t = times[i];
+      if (typeof t !== 'string') continue;
+      var ms = Date.parse(t);
+      if (isNaN(ms)) continue;
+      if (ms <= now && ms > bestMs) { best = t; bestMs = ms; }
+      var diff = Math.abs(ms - now);
+      if (diff < nearDiff) { near = t; nearDiff = diff; }
+    }
+    return best !== null ? best : near;
+  }
+
+  /** Web Mercator (EPSG:3857) bounds of an XYZ tile, in meters: [xmin, ymin, xmax, ymax]. */
+  function mercatorTileBbox(x, y, z) {
+    var R = 20037508.342789244; // half the world width in meters
+    var size = (2 * R) / Math.pow(2, z);
+    var xmin = -R + x * size;
+    var ymax = R - y * size;
+    return [xmin, ymax - size, xmin + size, ymax];
+  }
+
+  /** Latitude of the top edge of XYZ tile row y at zoom z (Web Mercator). */
+  function tileLat(y, z) {
+    var n = Math.PI - 2 * Math.PI * y / Math.pow(2, z);
+    return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+  }
+
+  /** Wrap a longitude into -180..180. */
+  function wrapLon(lon) {
+    var l = ((Number(lon) + 180) % 360 + 360) % 360 - 180;
+    return l === -180 && lon > 0 ? 180 : l;
+  }
+
+  // NOAA nowCOAST radar areas (rough boxes, a little generous): [south, west, north, east].
+  var NOAA_RADAR_BOXES = [
+    [23.5, -126, 50.5, -65],    // lower 48 states
+    [51, -180, 72, -129],       // Alaska (with the Aleutians)
+    [18.5, -161, 23, -154],     // Hawaii
+    [17.4, -68, 18.8, -64.3],   // Puerto Rico and U.S. Virgin Islands
+    [13, 144.4, 15.6, 146.1]    // Guam and the Northern Mariana Islands
+  ];
+  /** True when a spot is inside NOAA radar coverage (CONUS, Alaska, Hawaii, PR/USVI, Guam). */
+  function inNoaaRadarCoverage(lat, lon) {
+    lat = Number(lat);
+    if (!isFinite(lat) || !isFinite(Number(lon))) return false;
+    lon = wrapLon(lon);
+    return NOAA_RADAR_BOXES.some(function (b) {
+      return lat >= b[0] && lat <= b[2] && lon >= b[1] && lon <= b[3];
+    });
+  }
+
+  var ERDDAP_CURRENTS = 'https://coastwatch.noaa.gov/erddap/griddap/noaacwBLENDEDNRTcurrentsDaily.transparentPng';
+  var ERDDAP_GRID = 0.25;          // degrees between grid points
+  var ERDDAP_LON_MAX = 179.875;    // grid edge (longitude)
+  var ERDDAP_LAT_MAX = 89.875;     // grid edge (latitude)
+  /**
+   * NOAA CoastWatch ERDDAP URL for a transparent PNG of current arrows covering the lon/lat
+   * box of XYZ tile (x, y, z). The box is clamped to the data grid; about 14 arrows per 256 px
+   * (STRIDE grid points apart). sizePx: picture size, default 256 (the app uses 512 to send
+   * fewer requests to this slow server). Returns null if nothing is left after clamping.
+   */
+  function erddapCurrentsUrl(x, y, z, sizePx) {
+    z = Math.round(Number(z));
+    x = Math.round(Number(x));
+    y = Math.round(Number(y));
+    var size = Math.round(Number(sizePx)) || 256;
+    if (!isFinite(z) || !isFinite(x) || !isFinite(y) || z < 0 || size < 64 || size > 1024) return null;
+    var n = Math.pow(2, z);
+    if (y < 0 || y >= n) return null;
+    x = ((x % n) + n) % n;
+    var lon0 = x / n * 360 - 180, lon1 = (x + 1) / n * 360 - 180;
+    var lat1 = tileLat(y, z), lat0 = tileLat(y + 1, z);
+    var stride = Math.max(1, Math.round((lon1 - lon0) / ERDDAP_GRID / (14 * size / 256)));
+    lon0 = Math.max(lon0, -ERDDAP_LON_MAX); lon1 = Math.min(lon1, ERDDAP_LON_MAX);
+    lat0 = Math.max(lat0, -ERDDAP_LAT_MAX); lat1 = Math.min(lat1, ERDDAP_LAT_MAX);
+    if (!(lon1 > lon0) || !(lat1 > lat0)) return null;
+    var box = '%5B(' + lat0.toFixed(4) + '):' + stride + ':(' + lat1.toFixed(4) + ')%5D' +
+      '%5B(' + lon0.toFixed(4) + '):' + stride + ':(' + lon1.toFixed(4) + ')%5D';
+    return ERDDAP_CURRENTS + '?u_current%5B(last)%5D' + box + ',v_current%5B(last)%5D' + box +
+      '&.draw=vectors&.vars=longitude%7Clatitude%7Cu_current%7Cv_current&.color=0x000000&.vec=1&.size=' + size + '%7C' + size;
+  }
+
+  /** GDACS dates are UTC without a zone ("2026-11-02T20:54:25"): read them as UTC. */
+  function parseGdacsDate(s) {
+    if (typeof s !== 'string' || !s.trim()) return null;
+    var t = s.trim();
+    if (!/(Z|[+-]\d\d:?\d\d)$/i.test(t)) t += 'Z';
+    var d = new Date(t);
+    return isNaN(d) ? null : d;
+  }
+
+  var GDACS_TYPES = { EQ: 'Earthquake', TC: 'Tropical storm', FL: 'Flood', VO: 'Volcano', DR: 'Drought', WF: 'Wildfire' };
+  function gdacsTypeLabel(code) { return GDACS_TYPES[String(code || '').toUpperCase()] || 'Disaster'; }
+  var GDACS_LEVELS = { red: 'Red', orange: 'Orange', green: 'Green' };
+  function gdacsLevel(level) { return GDACS_LEVELS[String(level || '').toLowerCase()] || 'Unknown'; }
+
+  /**
+   * Make a feed link safe to use: add https:// when the scheme is missing
+   * ("www.wpc.ncep.noaa.gov/x" -> "https://www.wpc.ncep.noaa.gov/x"). Only http(s) links are kept;
+   * anything else (javascript:, data:, ...) gives ''.
+   */
+  function fixFeedLink(link) {
+    var s = String(link == null ? '' : link).trim();
+    if (!s) return '';
+    if (/^\/\//.test(s)) s = 'https:' + s;
+    else if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
+    return /^https?:\/\/[^\s/?#]+/i.test(s) && !/\s/.test(s) ? s : '';
+  }
+
+  /**
+   * Read the items of an RSS 2.0 feed. Returns [{ title, link, pubDate }] in feed order
+   * (pubDate is the feed's own text; '' when missing). Never throws: bad XML gives [].
+   */
+  function parseRssItems(xmlString) {
+    if (typeof xmlString !== 'string' || !xmlString.trim() || typeof DOMParser === 'undefined') return [];
+    var doc;
+    try { doc = new DOMParser().parseFromString(xmlString, 'text/xml'); } catch (e) { return []; }
+    if (!doc || doc.getElementsByTagName('parsererror').length) return [];
+    function childText(node, name) {
+      for (var c = node.firstElementChild; c; c = c.nextElementSibling) {
+        if (c.localName === name || c.nodeName === name) return (c.textContent || '').replace(/\s+/g, ' ').trim();
+      }
+      return '';
+    }
+    var out = [];
+    var items = doc.getElementsByTagName('item');
+    for (var i = 0; i < items.length; i++) {
+      var title = childText(items[i], 'title');
+      var link = fixFeedLink(childText(items[i], 'link') || childText(items[i], 'guid'));
+      if (!title && !link) continue;
+      out.push({ title: title, link: link, pubDate: childText(items[i], 'pubDate') });
+    }
+    return out;
+  }
+
+  /** "just now", "5 minutes ago", "1 hour ago", "3 days ago" (plain words). '' if unknown. */
+  function timeAgo(date, nowMs) {
+    var t = date instanceof Date ? date.getTime() : typeof date === 'number' ? date : Date.parse(date);
+    if (!isFinite(t)) return '';
+    var now = isFinite(Number(nowMs)) && nowMs != null ? Number(nowMs) : Date.now();
+    var mins = Math.round((now - t) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + (mins === 1 ? ' minute ago' : ' minutes ago');
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 48) return hrs + (hrs === 1 ? ' hour ago' : ' hours ago');
+    var days = Math.floor(hrs / 24);
+    return days + ' days ago';
   }
 
   /** Test hook: array of ISO strings (sorted, unique). */
@@ -416,6 +610,56 @@
       if (lastPicked - t >= minGapMs) { picked.push(times[i]); lastPicked = t; }
     }
     return picked.reverse();
+  }
+
+  // ----- Local weather helpers (pure) -----
+  /** Celsius to Fahrenheit. null/NaN in -> null out. */
+  function cToF(c) {
+    if (c === null || c === undefined || c === '' || !isFinite(Number(c))) return null;
+    return Number(c) * 9 / 5 + 32;
+  }
+  /** Fahrenheit to Celsius. null/NaN in -> null out. */
+  function fToC(f) {
+    if (f === null || f === undefined || f === '' || !isFinite(Number(f))) return null;
+    return (Number(f) - 32) * 5 / 9;
+  }
+
+  var WMO_TEXT = {
+    0: 'Clear sky', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Cloudy',
+    45: 'Fog', 48: 'Icy fog',
+    51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle', 56: 'Light freezing drizzle', 57: 'Freezing drizzle',
+    61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 66: 'Light freezing rain', 67: 'Freezing rain',
+    71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 77: 'Snow grains',
+    80: 'Light showers', 81: 'Showers', 82: 'Heavy showers',
+    85: 'Snow showers', 86: 'Heavy snow showers',
+    95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Thunderstorm with heavy hail'
+  };
+  /** WMO weather code (Open-Meteo weather_code) to plain words. */
+  function wmoCodeText(code) {
+    var n = Number(code);
+    if (code === null || code === undefined || code === '' || !isFinite(n)) return 'Unknown';
+    if (WMO_TEXT[n]) return WMO_TEXT[n];
+    if (n >= 50 && n < 60) return 'Drizzle';
+    if (n >= 60 && n < 70) return 'Rain';
+    if (n >= 70 && n < 80) return 'Snow';
+    if (n >= 80 && n < 90) return 'Showers';
+    if (n >= 90) return 'Thunderstorm';
+    return 'Cloudy';
+  }
+
+  var COMPASS16 = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+  /** Degrees (where the wind comes from) to a 16-point compass name, e.g. 225 -> 'SW'. null if unknown. */
+  function degToCompass(deg) {
+    if (deg === null || deg === undefined || deg === '' || !isFinite(Number(deg))) return null;
+    return COMPASS16[Math.round((((Number(deg) % 360) + 360) % 360) / 22.5) % 16];
+  }
+  var COMPASS_WORDS = { N: 'north', E: 'east', S: 'south', W: 'west' };
+  /** 'SW' -> 'southwest', 'NNE' -> 'north-northeast'. Unknown text is returned as is. */
+  function compassWords(abbr) {
+    var s = String(abbr || '').toUpperCase();
+    if (!/^[NESW]{1,3}$/.test(s)) return String(abbr || '');
+    var word = function (t) { return t.split('').map(function (ch) { return COMPASS_WORDS[ch]; }).join(''); };
+    return s.length === 3 ? word(s[0]) + '-' + word(s.slice(1)) : word(s);
   }
 
   /** fetch with timeout (AbortController); also respects an outer signal. */
@@ -446,10 +690,26 @@
     appleDirUrl: appleDirUrl,
     googleSearchUrl: googleSearchUrl,
     appleSearchUrl: appleSearchUrl,
+    OVERPASS_MIRRORS: OVERPASS_MIRRORS.slice(),
+    overpassQuery: function (key, lat, lon, radiusM) { return overpassQuery(key, lat, lon, radiusM); },
     buildSpotUrl: buildSpotUrl,
     tilesForBounds: tilesForBounds,
     distanceMeters: distanceMeters,
     cardinal: cardinal,
+    pickWmsTime: pickWmsTime,
+    mercatorTileBbox: mercatorTileBbox,
+    erddapCurrentsUrl: erddapCurrentsUrl,
+    inNoaaRadarCoverage: inNoaaRadarCoverage,
+    parseGdacsDate: parseGdacsDate,
+    parseRssItems: parseRssItems,
+    fixFeedLink: fixFeedLink,
+    timeAgo: timeAgo,
+    shareFallbackPlan: shareFallbackPlan,
+    cToF: cToF,
+    fToC: fToC,
+    wmoCodeText: wmoCodeText,
+    degToCompass: degToCompass,
+    compassWords: compassWords,
     map: null,
     weather: {
       parseWmsTimes: parseWmsTimes,
@@ -487,7 +747,8 @@
   /**
    * Show a message in the status banner (also an aria-live region).
    * kind: 'info' | 'ok' (auto-hides after ~6 s) | 'error' (stays until the next message).
-   * action: optional { label, href } link shown after the text.
+   * action: optional { label, href } link, { label, onClick, id } button, or { box: text }
+   *   (read-only selectable text box); or an array of these, shown after the text.
    */
   function setStatus(msg, kind, action) {
     var banner = $('status-banner');
@@ -496,10 +757,22 @@
     clear(banner);
     if (!msg) { banner.hidden = true; return; }
     banner.appendChild(el('span', { text: msg }));
-    if (action && action.href) {
-      banner.appendChild(document.createTextNode(' '));
-      banner.appendChild(el('a', { href: action.href, text: action.label, className: 'banner-action' }));
-    }
+    var actions = !action ? [] : (Array.isArray(action) ? action : [action]);
+    actions.forEach(function (a) {
+      if (!a) return;
+      if (a.box != null) {
+        var box = el('textarea', { className: 'share-box', readonly: 'readonly', rows: '3', 'aria-label': a.label || 'Text to copy' });
+        box.value = a.box;
+        box.addEventListener('focus', function () { try { box.select(); } catch (e) { /* */ } });
+        banner.appendChild(box);
+      } else if (a.onClick) {
+        banner.appendChild(document.createTextNode(' '));
+        banner.appendChild(el('button', { type: 'button', id: a.id, className: 'banner-btn', text: a.label, on: { click: a.onClick } }));
+      } else if (a.href) {
+        banner.appendChild(document.createTextNode(' '));
+        banner.appendChild(el('a', { href: a.href, text: a.label, className: 'banner-action' }));
+      }
+    });
     banner.classList.toggle('is-error', kind === 'error');
     banner.hidden = false;
     if (kind === 'ok') statusTimer = setTimeout(function () { banner.hidden = true; clear(banner); }, 6000);
@@ -607,6 +880,14 @@
     wxPane.style.pointerEvents = 'none';
     var alertsPane = map.createPane('alerts');
     alertsPane.style.zIndex = 380;
+    // Ocean fills (sea temperature, currents, depth charts) sit just under the weather pane, so
+    // radar and clouds stay readable on top. Marine zone outlines sit above the weather pane.
+    var oceanPane = map.createPane('ocean');
+    oceanPane.style.zIndex = 330;
+    oceanPane.style.pointerEvents = 'none';
+    var oceanLinesPane = map.createPane('oceanlines');
+    oceanLinesPane.style.zIndex = 360;
+    oceanLinesPane.style.pointerEvents = 'none';
 
     makeIcons();
     layers.places = L.layerGroup().addTo(map);
@@ -677,7 +958,8 @@
       acc.hidden = true;
       acc.textContent = '';
     }
-    ['btn-copy', 'btn-share', 'btn-more'].forEach(function (id) { $(id).disabled = !has; });
+    // Copy and Share stay tappable: with no point they say what to do (never disabled silently).
+    $('btn-more').disabled = !has;
     if (!has && !$('sheet-more').hidden) closeSheet('sheet-more');
     if (has) {
       $('link-google-dir').href = googleDirUrl(p.lat, p.lon);
@@ -700,7 +982,9 @@
   var GEO_MESSAGES = {
     unsupported: 'This browser cannot use GPS. Try a newer browser, or use the Google Maps or Apple Maps app.',
     insecure: 'GPS needs a secure page. This page is not using https, so your phone will not share your location. Open Ready Map from an https:// link.',
-    1: 'Location is blocked. To use GPS, allow location for this site in your browser or phone settings. Then tap Show my location again.',
+    1: 'Location is blocked. To use GPS, allow location for this site. ' +
+       'On iPhone: Settings > Privacy & Security > Location Services > [your browser, e.g. Safari Websites, Brave, Chrome] > While Using the App. Then reload this page. ' +
+       'Android: tap the lock icon by the web address > Permissions > Location > Allow.',
     2: 'We cannot find your location right now. Turn on Location Services, go outside or near a window, and try again.',
     3: 'Finding your location took too long. Try again, best outside with a clear view of the sky.'
   };
@@ -868,41 +1152,82 @@
     return Promise.resolve(restore(legacyCopy(text)));
   }
 
-  function copyFailedMessage(text) {
-    setStatus('Could not copy. Press and hold to copy it yourself: ' + text, 'error');
+  /**
+   * Pure decision for the Share buttons (exposed for tests).
+   * 'need-point': nothing to share yet; 'share': use the share sheet; 'copy': copy + text-message link.
+   */
+  function shareFallbackPlan(o) {
+    o = o || {};
+    if (!o.hasPoint) return 'need-point';
+    return o.hasShare ? 'share' : 'copy';
   }
+
+  var NEED_POINT_MSG = 'Tap Show my location first, or tap the map to pick a spot. Then tap Share.';
 
   function smsHref(body) {
     // "sms:?&body=" works on both iOS and Android.
     return 'sms:?&body=' + encodeURIComponent(body);
   }
 
-  /** Share text via the share sheet, or copy + offer a text-message link. */
+  /**
+   * Start a copy right now. Call it synchronously inside a tap handler (before any await)
+   * so the tap's user activation is still valid. Resolves true only if the copy really worked.
+   */
+  function copyNow(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext !== false) {
+      var pr;
+      try { pr = navigator.clipboard.writeText(text); } catch (e) { pr = Promise.reject(e); }
+      return Promise.resolve(pr).then(function () { return true; }, function () { return legacyCopy(text); });
+    }
+    return copyText(text);
+  }
+
+  /** Copy failed: show the text in a selectable read-only box (not an error), optionally with the text link. */
+  function showCopyBox(text, withSms) {
+    var actions = [{ box: text, label: 'Text to copy' }];
+    if (withSms) actions.push({ label: 'Send it as a text message', href: smsHref(text) });
+    setStatus('Press and hold to copy:', 'info', actions);
+  }
+
+  function copyFailedMessage(text) { showCopyBox(text, false); }
+
+  /** Copy (started now) and report "Copied" + text link, or the press-and-hold box + text link. */
+  function copyAndReport(full) {
+    return copyNow(full).then(function (ok) {
+      if (ok) {
+        setStatus('Copied your location. Paste it in a message.', 'info',
+          { label: 'Or send it as a text message', href: smsHref(full) });
+      } else {
+        showCopyBox(full, true);
+      }
+      return ok;
+    });
+  }
+
+  /** Call navigator.share safely; always returns a promise. */
+  function callShare(data) {
+    try { return Promise.resolve(navigator.share(data)); } catch (e) { return Promise.reject(e); }
+  }
+
+  /** Share text via the share sheet; if there is none (or it fails), copy + offer a text-message link. */
   function shareText(title, text, url) {
     var full = url ? text + ' ' + url : text;
-    if (navigator.share) {
-      return navigator.share(url ? { title: title, text: text, url: url } : { title: title, text: text })
+    if (shareFallbackPlan({ hasShare: !!navigator.share, hasPoint: true }) === 'share') {
+      return callShare(url ? { title: title, text: text, url: url } : { title: title, text: text })
         .then(function () { setStatus('Shared.', 'ok'); })
         .catch(function (err) {
           if (err && err.name === 'AbortError') return; // user closed the share sheet
-          return fallbackShare(full);
+          return copyAndReport(full);
         });
     }
-    return fallbackShare(full);
-  }
-
-  function fallbackShare(full) {
-    return copyText(full).then(function (ok) {
-      setStatus(ok ? 'Copied. You can paste it in a message, or' : 'Sharing is not available here. You can', ok ? 'info' : 'error',
-        { label: 'send it as a text message', href: smsHref(full) });
-    });
+    return copyAndReport(full);
   }
 
   function onCopy() {
     var p = state.selected;
-    if (!p) return;
+    if (!p) { setStatus(NEED_POINT_MSG, 'info'); return; }
     var text = selectedText(p);
-    copyText(text).then(function (ok) {
+    copyNow(text).then(function (ok) {
       if (ok) setStatus('Copied: ' + text, 'ok');
       else copyFailedMessage(text);
     });
@@ -910,10 +1235,13 @@
 
   function onShare() {
     var p = state.selected;
-    if (!p) return;
+    if (shareFallbackPlan({ hasShare: !!navigator.share, hasPoint: !!p }) === 'need-point') {
+      setStatus(NEED_POINT_MSG, 'info');
+      return;
+    }
     var label = p.label && p.label !== 'Dropped pin' ? p.label + ': ' : '';
     var text = label + selectedText(p) + '. Map: ' + googlePointUrl(p.lat, p.lon);
-    shareText('Location', text);
+    shareText('Location', text); // share sheet or clipboard copy starts synchronously, inside the tap
   }
 
   function emergencyMessage(f) {
@@ -921,20 +1249,43 @@
       googlePointUrl(f.lat, f.lon);
   }
 
+  /** After waiting for GPS: two one-tap actions (Copy button = a new tap, and the text-message link). */
+  function locationReadyActions(msg) {
+    return [
+      { label: 'Copy', id: 'btn-copy-location', onClick: function () { copyAndReport(msg); } },
+      { label: 'Text it', href: smsHref(msg) }
+    ];
+  }
+
   function onShareMyLocation() {
     var btn = $('btn-share-location');
     var fresh = state.userFix && Date.now() - state.userFix.timestamp < 120000;
-    if (!fresh) setStatus('Getting your location to share… Please wait.', 'info');
+    if (fresh) {
+      // Use the fix right away, while the tap still counts as a user action.
+      shareText('I need help', emergencyMessage(state.userFix));
+      return;
+    }
+    var problem = geoProblem();
+    if (problem) { setStatus(problem + ' You can still call 911.', 'error'); return; }
+    setStatus('Getting your location to share… Please wait.', 'info');
     btn.disabled = true;
     getFixOnce().then(function (f) {
       btn.disabled = false;
       var msg = emergencyMessage(f);
-      if (!fresh) {
-        // The tap "permission" to open the share sheet may have expired while waiting for GPS.
-        // Offer a one-tap link instead of failing.
-        setStatus('Location ready.', 'info', { label: 'Tap here to text it', href: smsHref(msg) });
-      }
-      return shareText('I need help', msg);
+      // The tap's permission to share or copy has probably expired while we waited for GPS,
+      // so show one-tap Copy and Text it actions, then try once anyway.
+      setStatus('Location ready. Tap Copy, or Text it.', 'info', locationReadyActions(msg));
+      var tryCopy = function () {
+        return copyNow(msg).then(function (ok) {
+          if (ok) setStatus('Copied your location. Paste it in a message.', 'info', locationReadyActions(msg));
+          else setStatus('Press and hold to copy:', 'info', [{ box: msg, label: 'Text to copy' }].concat(locationReadyActions(msg)));
+        });
+      };
+      if (!navigator.share) return tryCopy();
+      return callShare({ title: 'I need help', text: msg }).then(function () { setStatus('Shared.', 'ok'); }, function (err) {
+        if (err && err.name === 'AbortError') return;
+        return tryCopy();
+      });
     }).catch(function (err) {
       btn.disabled = false;
       setStatus((err && err.message ? err.message : GEO_MESSAGES[2]) + ' You can still call 911.', 'error');
@@ -1196,16 +1547,21 @@
   // ---------------------------------------------------------------------------
   // 10. Find nearby
   // ---------------------------------------------------------------------------
-  function around(lat, lon) { return '(around:5000,' + lat.toFixed(5) + ',' + lon.toFixed(5) + ')'; }
+  function around(lat, lon, radiusM) {
+    return '(around:' + Math.round(radiusM || 2000) + ',' + Number(lat).toFixed(5) + ',' + Number(lon).toFixed(5) + ')';
+  }
   var NEARBY = {
     hospital: { label: 'Hospital', word: 'hospital', letter: 'H', color: '#9F1239',
       q: function (a) { return 'nwr["amenity"="hospital"]' + a + ';'; } },
     shelter: { label: 'Shelter', word: 'emergency shelter', letter: 'S', color: '#1D4ED8',
       q: function (a) {
         return 'nwr["social_facility"="shelter"]' + a + ';' +
-          'nwr["amenity"="shelter"]["emergency"~"^(yes|designated)$"]' + a + ';' +
-          'nwr["emergency"="shelter"]' + a + ';';
-      } },
+          'nwr["emergency"="shelter"]' + a + ';' +
+          'nwr["amenity"="shelter"]["emergency"="yes"]' + a + ';' +
+          'nwr["amenity"="shelter"]["emergency"="designated"]' + a + ';';
+      },
+      // Last try when no shelter is mapped within the widest radius.
+      fallback: 'community_centre' },
     police: { label: 'Police', word: 'police station', letter: 'P', color: '#1E3A8A',
       q: function (a) { return 'nwr["amenity"="police"]' + a + ';'; } },
     fire: { label: 'Fire station', word: 'fire station', letter: 'F', color: '#C2410C',
@@ -1213,6 +1569,110 @@
     gas: { label: 'Gas', word: 'gas station', letter: 'G', color: '#3F6212',
       q: function (a) { return 'nwr["amenity"="fuel"]' + a + ';'; } }
   };
+  var NEARBY_EXTRA = {
+    community_centre: { note: 'Community center (may open as a shelter)',
+      q: function (a) { return 'nwr["amenity"="community_centre"]' + a + ';'; } }
+  };
+
+  /** Full Overpass QL query for a category key (or 'community_centre') around a point. */
+  function overpassQuery(key, lat, lon, radiusM) {
+    var def = NEARBY[key] || NEARBY_EXTRA[key];
+    if (!def) return '';
+    return '[out:json][timeout:15];(' + def.q(around(lat, lon, radiusM)) + ');out center 20;';
+  }
+
+  function radiusWords(m) {
+    if (m <= 2000) return '1 mile';
+    if (m <= 5000) return '3 miles';
+    return '6 miles';
+  }
+
+  // --- Overpass mirror failover ---------------------------------------------
+  var mirrorFailedAt = {};
+  var lastOverpassAt = 0;
+
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage full or blocked */ } }
+
+  /** Mirrors in the order to try: last good first, recently failed ones skipped for 5 minutes. */
+  function mirrorOrder() {
+    var good = lsGet(OVERPASS_MIRROR_KEY);
+    var list = OVERPASS_MIRRORS.slice();
+    if (good && list.indexOf(good) > 0) { list.splice(list.indexOf(good), 1); list.unshift(good); }
+    var now = Date.now();
+    var fresh = list.filter(function (u) { return !(mirrorFailedAt[u] && now - mirrorFailedAt[u] < OVERPASS_SKIP_MS); });
+    return fresh.length ? fresh : list; // all failed recently: try them all again rather than give up
+  }
+
+  /** Be polite to the shared servers: at most one request every 3 seconds. */
+  function politeWait(signal) {
+    var wait = Math.max(0, 3000 - (Date.now() - lastOverpassAt));
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { lastOverpassAt = Date.now(); resolve(); }, wait);
+      if (signal) signal.addEventListener('abort', function () { clearTimeout(t); reject(new Error('aborted')); }, { once: true });
+    });
+  }
+
+  /** POST a query, trying each mirror in turn. Resolves to the parsed JSON, rejects if all fail. */
+  function overpassFetch(query, signal, onRetry) {
+    var order = mirrorOrder();
+    var i = 0;
+    function next() {
+      if (signal && signal.aborted) return Promise.reject(new Error('aborted'));
+      if (i >= order.length) return Promise.reject(new Error('all mirrors failed'));
+      var url = order[i];
+      if (i > 0 && onRetry) onRetry();
+      i++;
+      return politeWait(signal).then(function () {
+        return fetchWithTimeout(url, {
+          method: 'POST',
+          // Simple form POST: no CORS preflight.
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(query),
+          credentials: 'omit'
+        }, i < order.length ? OVERPASS_TIMEOUT_MS : OVERPASS_LAST_TIMEOUT_MS, signal);
+      }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status); // 429, 5xx, anything not OK: next mirror
+        return res.text();
+      }).then(function (txt) {
+        var json = JSON.parse(txt); // invalid JSON (e.g. an HTML error page) also moves on
+        if (!json || !Array.isArray(json.elements)) throw new Error('bad reply');
+        if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark) && !json.elements.length) {
+          throw new Error('server busy');
+        }
+        delete mirrorFailedAt[url];
+        lsSet(OVERPASS_MIRROR_KEY, url);
+        return json;
+      }).catch(function (err) {
+        if (signal && signal.aborted) throw err;
+        mirrorFailedAt[url] = Date.now();
+        return next();
+      });
+    }
+    return next();
+  }
+
+  // --- Saved results (localStorage) -------------------------------------------
+  function loadNearbyStore() {
+    try {
+      var o = JSON.parse(lsGet(NEARBY_STORE_KEY) || '{}');
+      return o && typeof o === 'object' ? o : {};
+    } catch (e) { return {}; }
+  }
+  function saveNearbyResult(ck, result) {
+    var store = loadNearbyStore();
+    var now = Date.now();
+    Object.keys(store).forEach(function (k) { if (!store[k] || !(now - store[k].t <= NEARBY_STORE_TTL)) delete store[k]; });
+    store[ck] = result;
+    var keys = Object.keys(store).sort(function (a, b) { return store[a].t - store[b].t; });
+    while (keys.length > NEARBY_STORE_MAX) delete store[keys.shift()];
+    lsSet(NEARBY_STORE_KEY, JSON.stringify(store));
+  }
+  function getSavedNearby(ck) {
+    var r = loadNearbyStore()[ck];
+    if (!r || !Array.isArray(r.items) || !(Date.now() - r.t <= NEARBY_STORE_TTL)) return null;
+    return r;
+  }
 
   function openNearby(key, opener) {
     var cat = NEARBY[key];
@@ -1224,14 +1684,34 @@
     $('link-apple-search').href = appleSearchUrl(cat.word, p.lat, p.lon);
     $('nearby-status').textContent = '';
     clear($('nearby-list'));
-    var cached = state.nearbyCache.get(nearbyKey(key, p));
+    var ck = nearbyKey(key, p);
+    var cached = state.nearbyCache.get(ck);
     if (cached) renderNearby(cat, p, cached);
+    else if (!navigator.onLine) {
+      var saved = getSavedNearby(ck);
+      if (saved) renderNearby(cat, p, saved, true);
+    }
     openSheet('sheet-nearby', opener);
   }
 
   function nearbyKey(key, p) { return key + ':' + p.lat.toFixed(3) + ',' + p.lon.toFixed(3); }
 
-  var lastOverpassAt = 0;
+  function parseNearbyItems(json, cat, p, note) {
+    return (json.elements || []).map(function (e) {
+      var lat = e.lat != null ? e.lat : e.center && e.center.lat;
+      var lon = e.lon != null ? e.lon : e.center && e.center.lon;
+      if (!isFinite(lat) || !isFinite(lon)) return null;
+      var tags = e.tags || {};
+      var addr = [tags['addr:housenumber'], tags['addr:street'], tags['addr:city']].filter(Boolean).join(' ');
+      return {
+        name: String(tags.name || tags.operator || note || ('Unnamed ' + cat.label.toLowerCase())).slice(0, 100),
+        note: note && (tags.name || tags.operator) ? note : '',
+        addr: addr.slice(0, 120), phone: String(tags.phone || tags['contact:phone'] || '').slice(0, 40),
+        lat: lat, lon: lon, dist: distanceMeters(p.lat, p.lon, lat, lon)
+      };
+    }).filter(Boolean).sort(function (a, b) { return a.dist - b.dist; });
+  }
+
   function showNearbyOnMap() {
     var key = state.nearbyCategory;
     var cat = NEARBY[key];
@@ -1242,63 +1722,81 @@
     if (state.nearbyCache.has(ck)) { renderNearby(cat, p, state.nearbyCache.get(ck)); return; }
     if (state.nearbyFlight) { status.textContent = 'Still looking… please wait.'; return; }
     if (!navigator.onLine) {
+      var saved = getSavedNearby(ck);
+      if (saved) { renderNearby(cat, p, saved, true); return; }
       status.textContent = 'You are offline, so we cannot search the map. When you have signal, use the Google Maps or Apple Maps buttons above.';
       return;
     }
-    // Be polite to the shared Overpass server: at most one request every 3 seconds.
-    var wait = Math.max(0, 3000 - (Date.now() - lastOverpassAt));
     var btn = $('btn-nearby-show');
     btn.disabled = true;
-    status.textContent = 'Looking for ' + cat.label.toLowerCase() + ' places within 3 miles…';
     var ctrl = new AbortController();
     state.nearbyFlight = ctrl;
-    setTimeout(function () {
-      lastOverpassAt = Date.now();
-      var query = '[out:json][timeout:15];(' + cat.q(around(p.lat, p.lon)) + ');out center 20;';
-      fetchWithTimeout(OVERPASS_URL, {
-        method: 'POST',
-        // Simple form POST: no CORS preflight.
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(query),
-        credentials: 'omit'
-      }, 20000, ctrl.signal).then(function (res) {
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return res.json();
-      }).then(function (json) {
-        var items = (json.elements || []).map(function (e) {
-          var lat = e.lat != null ? e.lat : e.center && e.center.lat;
-          var lon = e.lon != null ? e.lon : e.center && e.center.lon;
-          if (!isFinite(lat) || !isFinite(lon)) return null;
-          var tags = e.tags || {};
-          var addr = [tags['addr:housenumber'], tags['addr:street'], tags['addr:city']].filter(Boolean).join(' ');
-          return {
-            name: String(tags.name || tags.operator || ('Unnamed ' + cat.label.toLowerCase())).slice(0, 100),
-            addr: addr.slice(0, 120), phone: String(tags.phone || tags['contact:phone'] || '').slice(0, 40),
-            lat: lat, lon: lon, dist: distanceMeters(p.lat, p.lon, lat, lon)
-          };
-        }).filter(Boolean).sort(function (a, b) { return a.dist - b.dist; });
-        state.nearbyCache.set(ck, items);
-        if (state.nearbyCache.size > 30) state.nearbyCache.delete(state.nearbyCache.keys().next().value);
-        if (state.nearbyCategory === key) renderNearby(cat, p, items);
-      }).catch(function () {
-        status.textContent = 'Could not load places on this map right now. Please use the Google Maps or Apple Maps buttons above.';
-      }).finally(function () {
-        state.nearbyFlight = null;
-        btn.disabled = false;
+    var current = function () { return state.nearbyCategory === key && state.selected === p; };
+    var say = function (t) { if (current()) status.textContent = t; };
+    var onRetry = function () { say('Trying another map server…'); };
+
+    // Widen step by step: 1 mile, 3 miles, 6 miles (each a new request with failover),
+    // then for shelters, community centers within 6 miles.
+    var steps = NEARBY_RADII.map(function (r) { return { key: key, r: r, note: '' }; });
+    if (cat.fallback) {
+      steps.push({ key: cat.fallback, r: NEARBY_RADII[NEARBY_RADII.length - 1], note: NEARBY_EXTRA[cat.fallback].note });
+    }
+    var idx = 0;
+    var searchedR = 0; // widest radius that was actually searched (with 0 results so far)
+    function run() {
+      var s = steps[idx];
+      say(s.note ? 'No shelters mapped within ' + radiusWords(s.r) + '. Looking for community centers…'
+        : 'Looking within ' + radiusWords(s.r) + '…');
+      return overpassFetch(overpassQuery(s.key, p.lat, p.lon, s.r), ctrl.signal, onRetry).then(function (json) {
+        var items = parseNearbyItems(json, cat, p, s.note);
+        if (!s.note) searchedR = s.r;
+        if (!items.length && idx < steps.length - 1) { idx++; return run(); }
+        return { t: Date.now(), r: s.r, items: items, fallback: !!s.note && items.length > 0 };
+      }, function (err) {
+        // A wider search failed after a narrower one worked: say what we know (not cached, so a retry can widen).
+        if (searchedR && !(ctrl.signal.aborted)) {
+          return { t: Date.now(), r: searchedR, items: [], partial: true };
+        }
+        throw err;
       });
-    }, wait);
+    }
+    run().then(function (result) {
+      if (result.partial) { if (current()) renderNearby(cat, p, result); return; }
+      state.nearbyCache.set(ck, result);
+      if (state.nearbyCache.size > 30) state.nearbyCache.delete(state.nearbyCache.keys().next().value);
+      saveNearbyResult(ck, result);
+      if (current()) renderNearby(cat, p, result);
+    }).catch(function () {
+      if (!current()) return;
+      var saved = getSavedNearby(ck);
+      if (saved) { renderNearby(cat, p, saved, true); return; }
+      status.textContent = 'Could not load places on this map right now (the map servers did not answer). Please use the Google Maps or Apple Maps buttons above.';
+    }).finally(function () {
+      state.nearbyFlight = null;
+      btn.disabled = false;
+    });
   }
 
-  function renderNearby(cat, p, items) {
+  /** result = { t, r (radius m), items, fallback }. fromSaved: shown from localStorage. */
+  function renderNearby(cat, p, result, fromSaved) {
+    var items = result.items || [];
     var list = $('nearby-list');
     var status = $('nearby-status');
     clear(list);
     layers.nearby.clearLayers();
+    var savedNote = fromSaved ? ' Saved from ' + new Date(result.t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) +
+      ' (' + timeAgo(result.t) + ').' : '';
+    var within = radiusWords(result.r || NEARBY_RADII[NEARBY_RADII.length - 1]);
     if (!items.length) {
-      status.textContent = 'No ' + cat.label.toLowerCase() + ' places found within 3 miles on OpenStreetMap. Try the Google Maps or Apple Maps buttons.';
+      status.textContent = 'No ' + cat.label.toLowerCase() + ' places found within ' + within +
+        ' on OpenStreetMap.' + (result.partial ? ' Could not search wider right now (the map servers did not answer); tap Show on this map to try again.' : '') +
+        ' Try the Google Maps or Apple Maps buttons.' + savedNote;
       return;
     }
-    status.textContent = 'Found ' + items.length + '. Closest first. They are now on the map.';
+    status.textContent = (result.fallback
+      ? 'No shelters mapped nearby. Found ' + items.length + ' community center' + (items.length === 1 ? '' : 's') +
+        ' within ' + within + ' (may open as a shelter; check local news).'
+      : 'Found ' + items.length + ' within ' + within + '.') + ' Closest first. They are now on the map.' + savedNote;
     var group = [];
     items.forEach(function (it) {
       var icon = L.divIcon({
@@ -1317,6 +1815,7 @@
       group.push([it.lat, it.lon]);
       var li = el('li', null, [
         el('div', { className: 'result-name', text: it.name }),
+        it.note ? el('div', { className: 'result-meta', text: it.note }) : null,
         el('div', { className: 'result-meta', text: formatDistance(it.dist) + ' away' + (it.addr ? ' · ' + it.addr : '') }),
         it.phone ? el('a', { href: 'tel:' + it.phone.replace(/[^0-9+]/g, ''), text: 'Call ' + it.phone, className: 'btn' }) : null,
         el('div', { className: 'btn-row' }, [
@@ -1516,9 +2015,14 @@
 
     // fallbackGen: the radar generation that already started the RainViewer fallback (one per
     // generation); fallbackFlight: the in-flight RainViewer request, if any.
+    // area: the "Which radar" choice ('auto' | 'us' | 'world'); pick: what auto/us/world chose
+    // for this generation ('noaa' | 'world'). mode is what is really on screen (NOAA can fall
+    // back to RainViewer).
     var radar = { on: false, mode: 'noaa', layer: null, frames: [], frameLayers: [], idx: 0, timer: null,
-      playing: false, lastGood: null, gen: 0, errors: 0, loads: 0, fallbackGen: -1, fallbackFlight: null };
+      playing: false, lastGood: null, gen: 0, errors: 0, loads: 0, fallbackGen: -1, fallbackFlight: null,
+      area: 'auto', pick: 'noaa', moveTimer: null };
     var sat = { on: false, kind: 'goes_longwave_imagery', layer: null, lastGood: null, gen: 0 };
+    var gdacs = { on: false, layer: null, gen: 0, ctrl: null, features: [], lastGood: null, listTimer: null };
     var alerts = { on: false, layer: null, renderer: null, timer: null, lastGood: null, lastFetch: 0, gen: 0,
       ctrl: null, features: [], featuresKey: null, stateCode: null, stateKey: null, wholeState: false };
 
@@ -1585,13 +2089,23 @@
       return wmsLayer(RADAR_WMS, RADAR_LAYER, frame.time, opac, NOAA_ATTRIBUTION);
     }
 
+    /** Should this radar generation use NOAA? (auto: only when the map center is in NOAA coverage) */
+    function radarWantsNoaa() {
+      if (radar.area === 'us') return true;
+      if (radar.area === 'world') return false;
+      var c = state.map.getCenter();
+      return inNoaaRadarCoverage(c.lat, c.lng);
+    }
+
     function radarOn() {
       radar.on = true;
       setToggle('toggle-radar', true);
       var gen = ++radar.gen;
       $('radar-note').textContent = '';
+      radar.pick = radarWantsNoaa() ? 'noaa' : 'world';
       if (!navigator.onLine) { radarOffline(); return; }
       $('time-radar').textContent = 'Loading…';
+      if (radar.pick === 'world') { useRainViewer(gen); return; }
       showLegend('legend-radar', legendUrl(RADAR_WMS, RADAR_LAYER));
       getCaps(RADAR_WMS).then(function (xml) {
         if (gen !== radar.gen) return;
@@ -1637,11 +2151,31 @@
       radar.frameLayers = [];
       radar.frameLayers[radar.idx] = layer;
       radar.lastGood = latest.date;
-      $('time-radar').textContent = formatLocalTime(latest.date);
+      $('time-radar').textContent = formatLocalTime(latest.date) + radarSourceText();
       $('radar-frame-time').textContent = '';
       $('btn-radar-play').disabled = frames.length < 2;
-      if (radar.mode === 'rainviewer') $('radar-note').textContent = 'Using backup radar (RainViewer).';
-      else $('radar-note').textContent = 'Radar covers the U.S. and its territories.';
+      if (radar.mode === 'rainviewer' && radar.pick === 'world') {
+        $('radar-note').textContent = 'World radar from RainViewer. It is less detailed when you zoom in close.';
+      } else if (radar.mode === 'rainviewer') {
+        $('radar-note').textContent = 'Using backup radar (RainViewer).';
+      } else {
+        $('radar-note').textContent = 'U.S. radar from NOAA. It covers the U.S. and its territories.';
+      }
+    }
+
+    function radarSourceText() {
+      if (radar.mode !== 'rainviewer') return ' · NOAA (U.S.)';
+      return radar.pick === 'world' ? ' · RainViewer (world)' : ' · RainViewer (backup)';
+    }
+
+    /** Auto mode: after the map stops moving, switch source if the center crossed the NOAA edge. */
+    function onMapMoveForRadar() {
+      clearTimeout(radar.moveTimer);
+      radar.moveTimer = setTimeout(function () {
+        if (!radar.on || radar.area !== 'auto') return;
+        var want = radarWantsNoaa() ? 'noaa' : 'world';
+        if (want !== radar.pick) radarOn();
+      }, 800);
     }
 
     /** Switch to RainViewer. Guarded: at most one API request per radar generation. */
@@ -1651,7 +2185,7 @@
       if (radar.fallbackGen === gen) return Promise.resolve();
       if (!navigator.onLine) { radarOffline(); return Promise.resolve(); }
       radar.fallbackGen = gen;
-      $('radar-note').textContent = 'NOAA radar is not loading. Trying backup radar…';
+      $('radar-note').textContent = radar.pick === 'world' ? 'Loading world radar…' : 'NOAA radar is not loading. Trying backup radar…';
       var flight = fetchWithTimeout(RAINVIEWER_API, { credentials: 'omit' }, FETCH_TIMEOUT_MS).then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();
@@ -1764,15 +2298,20 @@
       $('satellite-note').textContent = '';
       if (!navigator.onLine) { satProblem(); return; }
       $('time-satellite').textContent = 'Loading…';
-      showLegend('legend-satellite', legendUrl(SAT_WMS, 'goes_longwave_imagery'));
+      var world = isWorldSat(sat.kind);
+      showLegend('legend-satellite', legendUrl(SAT_WMS, sat.kind));
+      $('satellite-source').textContent = world
+        ? 'World pictures: NOAA/NESDIS GMGSI, a mix of many weather satellites (GOES, Himawari, Meteosat). Updated every hour, about 2 to 3 hours old. Not shown near the poles.'
+        : 'Americas pictures: NOAA GOES satellites. They cover North and South America and are updated every few minutes.';
       getCaps(SAT_WMS).then(function (xml) {
         if (gen !== sat.gen) return;
         var dim = parseWmsDimension(xml, sat.kind);
-        var latest = dim.def || dim.times[dim.times.length - 1];
+        // Exact listed time (see pickWmsTime); the server default only if nothing is listed.
+        var latest = pickWmsTime(dim.listed, Date.now()) || dim.def;
         if (!latest) throw new Error('no time');
         if (sat.layer) state.map.removeLayer(sat.layer);
         var errors = 0, loads = 0;
-        sat.layer = wmsLayer(SAT_WMS, sat.kind, latest, opacity('opacity-satellite'), NOAA_ATTRIBUTION);
+        sat.layer = wmsLayer(SAT_WMS, sat.kind, latest, opacity('opacity-satellite'), world ? GMGSI_ATTRIBUTION : NOAA_ATTRIBUTION);
         sat.layer.on('tileload', function () { loads++; });
         sat.layer.on('tileerror', function () {
           errors++;
@@ -1782,15 +2321,19 @@
         });
         sat.layer.addTo(state.map);
         sat.lastGood = new Date(latest);
-        $('time-satellite').textContent = formatLocalTime(sat.lastGood);
-        if (sat.kind === 'goes_visible_imagery') {
+        $('time-satellite').textContent = formatLocalTime(sat.lastGood) + (world ? ' · World mix (GMGSI)' : ' · GOES (Americas)');
+        if (/visible/.test(sat.kind)) {
           $('satellite-note').textContent = 'Daytime pictures are dark at night. Use "Night and day" after sunset.';
+        } else if (world) {
+          $('satellite-note').textContent = 'World pictures are updated every hour and are about 2 to 3 hours old.';
         }
       }).catch(function () {
         if (gen !== sat.gen) return;
         satProblem();
       });
     }
+
+    function isWorldSat(kind) { return /^global_/.test(kind); }
 
     function satProblem() {
       $('satellite-note').textContent = (navigator.onLine ? 'Cloud pictures could not load right now. Turn it off and on to try again.' : OFFLINE_MSG) +
@@ -1884,6 +2427,15 @@
         });
     }
 
+    /** Usable alert features from an api.weather.gov alerts answer, worst first. Shared with Local weather. */
+    function alertFeatures(json) {
+      var features = (json && Array.isArray(json.features) ? json.features : []).filter(function (f) {
+        return f && f.properties;
+      });
+      features.sort(function (a, b) { return severityRank(b.properties.severity) - severityRank(a.properties.severity); });
+      return features;
+    }
+
     function fetchAlerts() {
       if (!alerts.on) return;
       var gen = ++alerts.gen;
@@ -1918,10 +2470,7 @@
           return res.json();
         }).then(function (json) {
           if (gen !== alerts.gen) return;
-          var features = (json && Array.isArray(json.features) ? json.features : []).filter(function (f) {
-            return f && f.properties;
-          });
-          features.sort(function (a, b) { return severityRank(b.properties.severity) - severityRank(a.properties.severity); });
+          var features = alertFeatures(json);
           alerts.features = features;
           // Point results tell us the state of this spot; state-wide results do not change it.
           alerts.featuresKey = wholeState ? null : placeKey(pt);
@@ -1941,7 +2490,8 @@
       }).catch(function (err) {
         if (gen !== alerts.gen) return;
         if (err && err.outside) {
-          note.textContent = 'Weather warnings are only for the United States. Move the map or your location to a U.S. spot.';
+          note.textContent = 'Weather warnings are only for the United States. Move the map or your location to a U.S. spot. ' +
+            'For other countries, turn on World disaster alerts below.';
           $('time-alerts').textContent = formatLocalTime(new Date());
           renderAlertList([]);
           clearAlertShapes();
@@ -2127,6 +2677,502 @@
       alerts.layer.eachLayer(function (gj) { gj.setStyle({ fillOpacity: o }); });
     }
 
+    // ----- World disaster alerts (GDACS) -----
+    // One request for the whole world list (about 100 events); the map area and the user's
+    // spot are never sent. Feed text is only ever put on the page with textContent.
+    var GDACS_API = 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/EVENTS4APP';
+    var GDACS_REPORT_RE = /^https:\/\/www\.gdacs\.org\//;
+    var GDACS_LIST_MAX = 10;
+    var GDACS_RANK = { Red: 3, Orange: 2, Green: 1, Unknown: 0 };
+
+    function gdacsNote(text) { $('gdacs-note').textContent = text; }
+
+    function gdacsOn() {
+      gdacs.on = true;
+      setToggle('toggle-gdacs', true);
+      $('btn-gdacs-refresh').disabled = false;
+      fetchGdacs();
+    }
+
+    function gdacsOff() {
+      gdacs.on = false;
+      gdacs.gen++;
+      if (gdacs.ctrl) gdacs.ctrl.abort();
+      gdacs.ctrl = null;
+      clearTimeout(gdacs.listTimer);
+      if (gdacs.layer) { state.map.removeLayer(gdacs.layer); gdacs.layer = null; }
+      gdacs.features = [];
+      setToggle('toggle-gdacs', false);
+      $('btn-gdacs-refresh').disabled = true;
+      $('time-gdacs').textContent = 'Off';
+      gdacsNote('');
+      clear($('gdacs-list'));
+    }
+
+    function gdacsProblem() {
+      gdacsNote((navigator.onLine ? 'Could not get world disaster alerts right now. Tap Refresh to try again.' : OFFLINE_MSG) +
+        lastUpdatedText(gdacs.lastGood));
+      if (!gdacs.lastGood) $('time-gdacs').textContent = 'Not loaded';
+      else $('time-gdacs').textContent = formatLocalTime(gdacs.lastGood) + ' (old)';
+    }
+
+    /** Clean one GeoJSON feature into plain values we control. null if unusable. */
+    function gdacsEvent(f) {
+      if (!f || !f.geometry || f.geometry.type !== 'Point' || !f.properties) return null;
+      var c = f.geometry.coordinates || [];
+      var lon = Number(c[0]), lat = Number(c[1]);
+      if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 360) return null;
+      var p = f.properties;
+      var report = p.url && typeof p.url.report === 'string' && GDACS_REPORT_RE.test(p.url.report) ? p.url.report : null;
+      var sev = p.severitydata && typeof p.severitydata.severitytext === 'string' ? p.severitydata.severitytext : '';
+      return {
+        lat: lat,
+        lon: wrapLon(lon),
+        type: gdacsTypeLabel(p.eventtype),
+        level: gdacsLevel(p.alertlevel),
+        name: String(p.name || p.eventname || gdacsTypeLabel(p.eventtype)).slice(0, 200),
+        country: typeof p.country === 'string' ? p.country.slice(0, 200) : '',
+        severity: sev.slice(0, 200),
+        from: parseGdacsDate(p.fromdate),
+        to: parseGdacsDate(p.todate),
+        modified: parseGdacsDate(p.datemodified),
+        report: report
+      };
+    }
+
+    function fetchGdacs() {
+      if (!gdacs.on) return;
+      var gen = ++gdacs.gen;
+      if (gdacs.ctrl) gdacs.ctrl.abort();
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      gdacs.ctrl = ctrl;
+      if (!navigator.onLine) { gdacsProblem(); return; }
+      gdacsNote('Checking for disaster alerts…');
+      if (!gdacs.lastGood) $('time-gdacs').textContent = 'Loading…';
+      fetchWithTimeout(GDACS_API, { credentials: 'omit', headers: { Accept: 'application/json' } }, 25000, ctrl && ctrl.signal)
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        }).then(function (json) {
+          if (gen !== gdacs.gen || !gdacs.on) return;
+          var list = (json && Array.isArray(json.features) ? json.features : []).map(gdacsEvent).filter(Boolean);
+          gdacs.features = list;
+          var newest = null;
+          list.forEach(function (e) { if (e.modified && (!newest || e.modified > newest)) newest = e.modified; });
+          gdacs.lastGood = newest || new Date();
+          $('time-gdacs').textContent = formatLocalTime(gdacs.lastGood) + ' (newest update)';
+          var big = list.filter(function (e) { return e.level === 'Red' || e.level === 'Orange'; }).length;
+          gdacsNote(list.length
+            ? list.length + ' alert' + (list.length === 1 ? '' : 's') + ' in the world now (' + big + ' orange or red).'
+            : 'No disaster alerts in the world right now.');
+          drawGdacs();
+          renderGdacsList();
+        }).catch(function () {
+          if (gen !== gdacs.gen || !gdacs.on) return;
+          gdacsProblem();
+        });
+    }
+
+    function gdacsLevelClass(level) { return 'gdacs-' + level.toLowerCase(); }
+
+    function gdacsIcon(level) {
+      var size = level === 'Red' ? 30 : level === 'Orange' ? 26 : 22;
+      // Only fixed, known strings go into this HTML (never feed text).
+      return L.divIcon({
+        className: 'gdacs-icon',
+        html: '<span class="gdacs-dot ' + gdacsLevelClass(level) + '">' + level.charAt(0) + '</span>',
+        iconSize: [size, size], iconAnchor: [size / 2, size / 2], popupAnchor: [0, -size / 2]
+      });
+    }
+
+    function gdacsPopup(e) {
+      var kids = [
+        el('p', { className: 'gdacs-pop-title', text: e.name }),
+        el('p', { text: e.type + ' · ' + e.level + ' alert' }),
+        e.severity ? el('p', { text: e.severity }) : null,
+        e.country ? el('p', { text: 'Where: ' + e.country }) : null,
+        e.from ? el('p', { text: 'Started: ' + formatLocalTime(e.from) }) : null,
+        e.modified ? el('p', { text: 'Updated: ' + formatLocalTime(e.modified) }) : null
+      ];
+      if (e.report) {
+        kids.push(el('p', null, [el('a', { href: e.report, target: '_blank', rel: 'noopener noreferrer', text: 'Read the GDACS report' })]));
+      }
+      return el('div', { className: 'gdacs-pop' }, kids);
+    }
+
+    function drawGdacs() {
+      if (gdacs.layer) state.map.removeLayer(gdacs.layer);
+      gdacs.layer = L.featureGroup([], { attribution: GDACS_ATTRIBUTION });
+      gdacs.layer.getAttribution = function () { return GDACS_ATTRIBUTION; };
+      var op = opacity('opacity-gdacs');
+      // Least serious first so red ends up on top.
+      gdacs.features.slice().sort(function (a, b) { return GDACS_RANK[a.level] - GDACS_RANK[b.level]; }).forEach(function (e) {
+        var m = L.marker([e.lat, e.lon], {
+          icon: gdacsIcon(e.level),
+          title: e.type + ', ' + e.level + ' alert: ' + e.name,
+          alt: e.type + ', ' + e.level + ' alert',
+          opacity: op,
+          zIndexOffset: GDACS_RANK[e.level] * 100,
+          keyboard: true
+        });
+        m.bindPopup(function () { return gdacsPopup(e); });
+        e.marker = m;
+        gdacs.layer.addLayer(m);
+      });
+      gdacs.layer.addTo(state.map);
+    }
+
+    function formatFar(m) {
+      if (m < 16093) return formatDistance(m) + ' (' + (m / 1000).toFixed(1) + ' km)';
+      return Math.round(m / 1609.344).toLocaleString() + ' mi (' + Math.round(m / 1000).toLocaleString() + ' km)';
+    }
+
+    /** The 10 alerts nearest the map center, with distance. */
+    function renderGdacsList() {
+      var list = $('gdacs-list');
+      clear(list);
+      if (!gdacs.on || !gdacs.features.length) return;
+      var c = state.map.getCenter().wrap();
+      var near = gdacs.features.map(function (e) {
+        return { e: e, d: distanceMeters(c.lat, c.lng, e.lat, e.lon) };
+      }).sort(function (a, b) { return a.d - b.d; }).slice(0, GDACS_LIST_MAX);
+      near.forEach(function (n) {
+        var e = n.e;
+        var dot = el('span', { className: 'gdacs-dot ' + gdacsLevelClass(e.level), 'aria-hidden': 'true', text: e.level.charAt(0) });
+        var li = el('li', { className: 'gdacs-item' }, [
+          el('div', { className: 'gdacs-item-head' }, [dot, el('span', { className: 'alert-item-title', text: e.type + ' · ' + e.level })]),
+          el('div', { text: e.name }),
+          el('div', { className: 'alert-item-meta', text: formatFar(n.d) + ' from the map center' +
+            (e.severity ? ' · ' + e.severity : '') }),
+          el('button', {
+            type: 'button', className: 'btn', text: 'Show on map', 'aria-label': 'Show on map: ' + e.name,
+            on: { click: function () {
+              state.map.setView([e.lat, e.lon], Math.max(state.map.getZoom(), 5), { animate: !reducedMotion() });
+              // Open after the move ends so the popup's own auto-pan is not cut short.
+              setTimeout(function () {
+                if (e.marker && gdacs.layer && gdacs.layer.hasLayer(e.marker)) e.marker.openPopup();
+              }, reducedMotion() ? 0 : 450);
+            } }
+          })
+        ]);
+        li.style.borderLeftColor = { Red: '#C62828', Orange: '#EF6C00', Green: '#2E7D32' }[e.level] || '#607D8B';
+        list.appendChild(li);
+      });
+    }
+
+    function onMapMoveForGdacs() {
+      if (!gdacs.on) return;
+      clearTimeout(gdacs.listTimer);
+      gdacs.listTimer = setTimeout(function () {
+        // Do not rebuild the list under the user's keyboard focus (e.g. right after "Show on map").
+        var list = $('gdacs-list');
+        if (list.contains(document.activeElement)) return;
+        renderGdacsList();
+      }, 500);
+    }
+
+    function applyGdacsOpacity() {
+      if (!gdacs.layer) return;
+      var o = opacity('opacity-gdacs');
+      gdacs.layer.eachLayer(function (m) { if (m.setOpacity) m.setOpacity(o); });
+    }
+
+    // ----- Ocean -----
+    // All NOAA, no key. Tiles are plain <img> loads and are never cached by the service worker.
+    var NOWCOAST_WMS = 'https://nowcoast.noaa.gov/geoserver/ows';
+    var NOWCOAST_ROOT = 'https://nowcoast.noaa.gov/geoserver/';
+    var RTOFS_WS = 'grtofs';
+    var RTOFS_EAST = 'rtofs_east_sfc_currents';
+    var RTOFS_WEST = 'rtofs_west_sfc_currents';
+    var LAKE_WS = ['leofs', 'lmhofs', 'loofs', 'lsofs']; // Erie, Michigan-Huron, Ontario, Superior
+    var SST_WS = 'sea_surface_temperature';
+    var SST_NAME = 'nasa_sport_sea_surface_temperature';
+    var ENC_WMS = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer';
+    var ZONES_EXPORT = 'https://mapservices.weather.noaa.gov/static/rest/services/nws_reference_maps/nws_reference_map/MapServer/export';
+    // Data areas (from GetCapabilities, rounded out a little) so no tiles are asked for elsewhere.
+    var RTOFS_BOUNDS = [[0, -180], [62.5, -40.5]];
+    var LAKES_BOUNDS = [[41.3, -92.2], [49.1, -75.9]];
+
+    var GEBCO_WMS = 'https://wms.gebco.net/mapserv';
+    var GEBCO_LAYER = 'GEBCO_LATEST_2';
+    var WORLD_CURRENTS_MIN_ZOOM = 3;
+    var WORLD_CURRENTS_NATIVE_MAX = 8; // ~11 arrows across a 512 px tile at map zoom 8; closer zooms enlarge them
+    var BLANK_TILE = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+    var OCEAN_KEYS = ['currents', 'sst', 'depth', 'marinezones', 'worldcurrents', 'worlddepth'];
+    var OCEAN_FAIL = {
+      currents: 'Ocean currents could not load right now. Turn it off and on to try again.',
+      sst: 'Sea temperature could not load right now. Turn it off and on to try again.',
+      depth: 'Depth lines could not load right now. Turn it off and on to try again.',
+      marinezones: 'Marine zones could not load right now. Turn it off and on to try again.',
+      worldcurrents: 'World currents could not load right now. Turn it off and on to try again.',
+      worlddepth: 'World sea depth could not load right now. Turn it off and on to try again.'
+    };
+    var OCEAN_TILE_FAIL = {
+      currents: 'Current pictures are not loading right now. Try again later.',
+      sst: 'Sea temperature pictures are not loading right now. Try again later.',
+      depth: 'Depth lines are not loading right now. Try again later.',
+      marinezones: 'Marine zone lines are not loading right now. Try again later.',
+      worldcurrents: 'World current arrows are not loading right now. Try again later.',
+      worlddepth: 'World sea depth pictures are not loading right now. Try again later.'
+    };
+    var ocean = {};
+    OCEAN_KEYS.forEach(function (k) { ocean[k] = { on: false, layers: [], gen: 0, lastGood: null }; });
+
+    function wsCapsUrl(ws) { return NOWCOAST_ROOT + ws + '/ows'; }
+
+    function intersect(a, b) {
+      var set = new Set(b);
+      return a.filter(function (x) { return set.has(x); });
+    }
+
+    function oceanWms(url, layerNames, time, opac, attribution, extra) {
+      var opts = {
+        layers: layerNames,
+        styles: '',
+        format: 'image/png',
+        transparent: true,
+        version: '1.3.0',
+        tileSize: 256,
+        updateWhenIdle: true,
+        updateWhenZooming: false,
+        keepBuffer: 0,
+        maxZoom: 19,
+        pane: 'ocean',
+        opacity: opac,
+        attribution: attribution
+      };
+      if (time) opts.time = time; // exact value from GetCapabilities (see pickWmsTime)
+      Object.keys(extra || {}).forEach(function (k) { opts[k] = extra[k]; });
+      return L.tileLayer.wms(url, opts);
+    }
+
+    /** NWS marine zone outlines from an ArcGIS MapServer "export" (no WMS there): one image per tile. */
+    var ZonesLayer = L.TileLayer.extend({
+      getTileUrl: function (coords) {
+        var b = mercatorTileBbox(coords.x, coords.y, coords.z).map(function (v) { return v.toFixed(2); });
+        return ZONES_EXPORT + '?bbox=' + b.join(',') + '&bboxSR=3857&imageSR=3857&size=256,256' +
+          '&format=png32&transparent=true&layers=show:5,6&f=image';
+      }
+    });
+
+    /**
+     * NOAA CoastWatch current arrows: each Mercator tile asks ERDDAP for its lon/lat box.
+     * 512 px tiles with zoomOffset -1 cover the same area as 4 normal tiles, so the slow
+     * server gets about 4 times fewer requests.
+     */
+    var WorldCurrentsLayer = L.TileLayer.extend({
+      getTileUrl: function (coords) {
+        var z = coords.z + (this.options.zoomOffset || 0);
+        return erddapCurrentsUrl(coords.x, coords.y, z, this.options.tileSize) || BLANK_TILE;
+      }
+    });
+
+    function oceanNote(key, text) { $(key + '-note').textContent = text; }
+    function oceanTime(key, text) { $('time-' + key).textContent = text; }
+
+    function removeOceanLayers(o) {
+      o.layers.forEach(function (l) { if (state.map.hasLayer(l)) state.map.removeLayer(l); });
+      o.layers = [];
+    }
+
+    /** Add a tile layer for an ocean entry; warn once if a batch of tiles all fail. */
+    function addOceanLayer(key, gen, layer) {
+      var o = ocean[key];
+      var errors = 0, loads = 0;
+      layer.on('loading', function () { errors = 0; loads = 0; });
+      layer.on('tileload', function () { loads++; });
+      layer.on('tileerror', function () {
+        errors++;
+        if (errors === 3 && loads === 0 && gen === o.gen) oceanNote(key, OCEAN_TILE_FAIL[key]);
+      });
+      // Small batches (1-2 tiles) never reach 3 errors: check again when the batch is done.
+      layer.on('load', function () {
+        if (errors > 0 && loads === 0 && gen === o.gen && o.on) oceanNote(key, OCEAN_TILE_FAIL[key]);
+      });
+      layer.addTo(state.map);
+      o.layers.push(layer);
+    }
+
+    function oceanProblem(key) {
+      var o = ocean[key];
+      oceanNote(key, (navigator.onLine ? OCEAN_FAIL[key] : OFFLINE_MSG) + lastUpdatedText(o.lastGood));
+      oceanTime(key, o.lastGood ? formatLocalTime(o.lastGood) + ' (old)' : 'Not loaded');
+    }
+
+    function oceanOn(key) {
+      var o = ocean[key];
+      o.on = true;
+      setToggle('toggle-' + key, true);
+      var gen = ++o.gen;
+      oceanNote(key, '');
+      if (!navigator.onLine) { oceanProblem(key); return; }
+      try {
+        OCEAN_START[key](gen);
+      } catch (e) {
+        if (gen === o.gen) oceanProblem(key);
+      }
+    }
+
+    function oceanOff(key) {
+      var o = ocean[key];
+      o.on = false;
+      o.gen++;
+      removeOceanLayers(o);
+      setToggle('toggle-' + key, false);
+      oceanTime(key, 'Off');
+      oceanNote(key, '');
+    }
+
+    /** Model run time (REFERENCE_TIME) of a layer, or null. */
+    function modelRun(xml, layerName, nowMs) {
+      var ref = parseWmsDimension(xml, layerName, 'REFERENCE_TIME');
+      return pickWmsTime(ref.listed, nowMs) || ref.def || null;
+    }
+
+    function startCurrents(gen) {
+      var o = ocean.currents;
+      oceanTime('currents', 'Loading…');
+      var now = Date.now();
+      // Offshore: NWS/NCEP Global RTOFS, east + west in one request (they share one time list).
+      var sea = getCaps(wsCapsUrl(RTOFS_WS)).then(function (xml) {
+        var times = intersect(parseWmsDimension(xml, RTOFS_EAST).listed, parseWmsDimension(xml, RTOFS_WEST).listed);
+        var t = pickWmsTime(times, now);
+        if (!t) throw new Error('no time');
+        return { time: t, run: modelRun(xml, RTOFS_EAST, now), layers: RTOFS_WS + ':' + RTOFS_EAST + ',' + RTOFS_WS + ':' + RTOFS_WEST };
+      }).catch(function () { return null; });
+      // Great Lakes: NOS operational forecast systems (hourly). One request for all lakes that
+      // share the picked time.
+      var lakes = Promise.all(LAKE_WS.map(function (ws) {
+        return getCaps(wsCapsUrl(ws)).then(function (xml) {
+          var name = ws + '_sfc_currents';
+          return { ws: ws, name: name, times: parseWmsDimension(xml, name).listed, run: modelRun(xml, name, now) };
+        }).catch(function () { return null; });
+      })).then(function (list) {
+        list = list.filter(function (x) { return x && x.times.length; });
+        if (!list.length) return null;
+        var common = list.reduce(function (acc, x) { return intersect(acc, x.times); }, list[0].times);
+        var t = pickWmsTime(common, now);
+        if (!t) {
+          t = pickWmsTime(list[0].times, now);
+          list = list.filter(function (x) { return x.times.indexOf(t) !== -1; });
+        }
+        if (!t || !list.length) return null;
+        return {
+          time: t,
+          run: list[0].run,
+          layers: list.map(function (x) { return x.ws + ':' + x.name; }).join(',')
+        };
+      }).catch(function () { return null; });
+
+      Promise.all([sea, lakes]).then(function (r) {
+        if (gen !== o.gen) return;
+        var s = r[0], gl = r[1];
+        if (!s && !gl) { oceanProblem('currents'); return; }
+        removeOceanLayers(o);
+        var op = opacity('opacity-currents');
+        if (s) addOceanLayer('currents', gen, oceanWms(NOWCOAST_WMS, s.layers, s.time, op, NOWCOAST_OCEAN_ATTRIBUTION, { bounds: RTOFS_BOUNDS, zIndex: 2 }));
+        if (gl) addOceanLayer('currents', gen, oceanWms(NOWCOAST_WMS, gl.layers, gl.time, op, NOWCOAST_OCEAN_ATTRIBUTION, { bounds: LAKES_BOUNDS, zIndex: 2 }));
+        var main = s || gl;
+        o.lastGood = new Date(main.time);
+        if (s && gl && gl.time !== s.time) {
+          // Ocean and Great Lakes use different model times: show both so the line matches what is on screen.
+          oceanTime('currents', 'Ocean model time ' + formatLocalTime(s.time) +
+            ' · Great Lakes model time ' + formatLocalTime(gl.time));
+        } else {
+          oceanTime('currents', (s ? 'Model time ' : 'Great Lakes model time ') + formatLocalTime(main.time) +
+            (main.run ? ' (model run ' + formatLocalTime(main.run) + ')' : ''));
+        }
+        var note = 'Covers U.S. coasts, nearby ocean and the Great Lakes.';
+        if (!s) note = 'Only Great Lakes currents loaded. Ocean currents could not load right now.';
+        if (!gl) note += ' Great Lakes currents could not load right now.';
+        oceanNote('currents', note);
+      }).catch(function () {
+        if (gen === o.gen) oceanProblem('currents');
+      });
+    }
+
+    function startSst(gen) {
+      var o = ocean.sst;
+      oceanTime('sst', 'Loading…');
+      getCaps(wsCapsUrl(SST_WS)).then(function (xml) {
+        if (gen !== o.gen) return;
+        var t = pickWmsTime(parseWmsDimension(xml, SST_NAME).listed, Date.now());
+        if (!t) throw new Error('no time');
+        removeOceanLayers(o);
+        addOceanLayer('sst', gen, oceanWms(NOWCOAST_WMS, SST_WS + ':' + SST_NAME, t, opacity('opacity-sst'),
+          NOWCOAST_OCEAN_ATTRIBUTION, { zIndex: 1 }));
+        o.lastGood = new Date(t);
+        oceanTime('sst', formatLocalTime(t) + ' (7-day satellite mix)');
+      }).catch(function () {
+        if (gen === o.gen) oceanProblem('sst');
+      });
+    }
+
+    function startDepth(gen) {
+      // Static chart data: no time list to read.
+      removeOceanLayers(ocean.depth);
+      addOceanLayer('depth', gen, oceanWms(ENC_WMS, '2', null, opacity('opacity-depth'), ENC_ATTRIBUTION, { zIndex: 3 }));
+      oceanTime('depth', 'NOAA ENC charts (updated weekly)');
+      oceanNote('depth', 'Covers U.S. coasts and the Great Lakes.');
+    }
+
+    function startZones(gen) {
+      removeOceanLayers(ocean.marinezones);
+      addOceanLayer('marinezones', gen, new ZonesLayer('', {
+        tileSize: 256, maxZoom: 19, pane: 'oceanlines', opacity: opacity('opacity-marinezones'),
+        updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 0, attribution: MARINE_ZONES_ATTRIBUTION
+      }));
+      oceanTime('marinezones', 'NWS marine zone map');
+      oceanNote('marinezones', 'Covers U.S. coastal and offshore waters.');
+    }
+
+    var WORLD_CURRENTS_NOTE = 'Covers oceans worldwide. Arrows can take a few seconds to load.';
+
+    /** World currents note: "Zoom in" below minZoom, "Loading…" while tiles load. */
+    function worldCurrentsNote(loading) {
+      var o = ocean.worldcurrents;
+      if (!o.on) return;
+      if (state.map.getZoom() < WORLD_CURRENTS_MIN_ZOOM) { oceanNote('worldcurrents', 'Zoom in to see world currents.'); return; }
+      oceanNote('worldcurrents', loading ? 'Loading current arrows… (this can take a few seconds)' : WORLD_CURRENTS_NOTE);
+    }
+
+    function startWorldCurrents(gen) {
+      // No time list to read: the browser cannot read ERDDAP's time CSV (no CORS header), and the
+      // image request asks for the newest day with "(last)".
+      var o = ocean.worldcurrents;
+      removeOceanLayers(o);
+      var layer = new WorldCurrentsLayer('', {
+        tileSize: 512, zoomOffset: -1,
+        minZoom: WORLD_CURRENTS_MIN_ZOOM, maxNativeZoom: WORLD_CURRENTS_NATIVE_MAX, maxZoom: 19,
+        pane: 'oceanlines', opacity: opacity('opacity-worldcurrents'), zIndex: 1,
+        updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 0, attribution: COASTWATCH_ATTRIBUTION
+      });
+      // Registered before addOceanLayer's handlers, so its "not loading" warning (all tiles of a
+      // batch failed) still wins over the normal note when a batch finishes.
+      layer.on('loading', function () { if (gen === o.gen) worldCurrentsNote(true); });
+      layer.on('load', function () { if (gen === o.gen) worldCurrentsNote(false); });
+      addOceanLayer('worldcurrents', gen, layer);
+      o.lastGood = new Date();
+      oceanTime('worldcurrents', 'Newest daily map (NOAA CoastWatch, about 1 to 2 days old)');
+      worldCurrentsNote(false);
+    }
+
+    function startWorldDepth(gen) {
+      // GEBCO grid: does not change, so there is no time list.
+      removeOceanLayers(ocean.worlddepth);
+      addOceanLayer('worlddepth', gen, oceanWms(GEBCO_WMS, GEBCO_LAYER, null, opacity('opacity-worlddepth'), GEBCO_ATTRIBUTION, { zIndex: 0 }));
+      oceanTime('worlddepth', 'GEBCO 2024 world sea floor map (does not change)');
+      oceanNote('worlddepth', 'Covers the whole world. Near U.S. coasts, Depth lines have more detail.');
+    }
+
+    var OCEAN_START = { currents: startCurrents, sst: startSst, depth: startDepth, marinezones: startZones,
+      worldcurrents: startWorldCurrents, worlddepth: startWorldDepth };
+
+    function anyOceanOn() {
+      return OCEAN_KEYS.some(function (k) { return ocean[k].on; });
+    }
+
     // ----- Wiring -----
     function bindOpacity(id, apply) {
       var input = $(id);
@@ -2158,6 +3204,7 @@
         this.setAttribute('aria-expanded', d.hidden ? 'false' : 'true');
       });
       Array.prototype.forEach.call(document.querySelectorAll('input[name="sat-kind"]'), function (r) {
+        if (r.checked) sat.kind = r.value; // the browser may restore a choice on reload
         r.addEventListener('change', function () {
           if (!r.checked) return;
           sat.kind = r.value;
@@ -2173,7 +3220,34 @@
       bindOpacity('opacity-satellite', function () { if (sat.layer) sat.layer.setOpacity(opacity('opacity-satellite')); });
       bindOpacity('opacity-alerts', applyAlertOpacity);
 
-      sheetCloseHooks['sheet-weather'] = function () { stopLoop(); $('btn-weather').classList.toggle('is-on', radar.on || sat.on || alerts.on); };
+      Array.prototype.forEach.call(document.querySelectorAll('input[name="radar-area"]'), function (r) {
+        if (r.checked) radar.area = r.value;
+        r.addEventListener('change', function () {
+          if (!r.checked) return;
+          radar.area = r.value;
+          if (radar.on) radarOn();
+        });
+      });
+
+      $('toggle-gdacs').addEventListener('click', function () { if (gdacs.on) gdacsOff(); else gdacsOn(); });
+      $('btn-gdacs-refresh').addEventListener('click', fetchGdacs);
+      bindOpacity('opacity-gdacs', applyGdacsOpacity);
+
+      state.map.on('moveend', function () {
+        onMapMoveForRadar();
+        onMapMoveForGdacs();
+      });
+      state.map.on('zoomend', function () { worldCurrentsNote(false); });
+
+      OCEAN_KEYS.forEach(function (key) {
+        $('toggle-' + key).addEventListener('click', function () { if (ocean[key].on) oceanOff(key); else oceanOn(key); });
+        bindOpacity('opacity-' + key, function () {
+          var op = opacity('opacity-' + key);
+          ocean[key].layers.forEach(function (l) { l.setOpacity(op); });
+        });
+      });
+
+      sheetCloseHooks['sheet-weather'] = function () { stopLoop(); $('btn-weather').classList.toggle('is-on', radar.on || sat.on || alerts.on || gdacs.on || anyOceanOn()); };
       document.addEventListener('visibilitychange', function () {
         if (document.hidden) {
           stopLoop();
@@ -2190,16 +3264,936 @@
       if (radar.on && !radar.layer) radarOn();
       if (sat.on && !sat.layer) satOn();
       if (alerts.on) fetchAlerts();
+      if (gdacs.on && !gdacs.features.length) fetchGdacs();
+      OCEAN_KEYS.forEach(function (k) { if (ocean[k].on && !ocean[k].layers.length) oceanOn(k); });
     }
 
     return {
       init: init,
       onOnline: onOnline,
-      state: { radar: radar, sat: sat, alerts: alerts }
+      gdacsEvent: gdacsEvent,
+      GDACS_API: GDACS_API,
+      ALERTS_API: ALERTS_API,
+      alertFeatures: alertFeatures,
+      openAlert: openAlert,
+      state: { radar: radar, sat: sat, alerts: alerts, gdacs: gdacs, ocean: ocean }
     };
   })();
 
   ReadyMap.weather.state = Weather.state;
+
+  // ---------------------------------------------------------------------------
+  // 14b. Weather news (official headlines for the map area)
+  // ---------------------------------------------------------------------------
+  // Each feed is fetched on its own; one failing only shows a short line in its group.
+  // Feed text only ever goes on the page with textContent. Nothing here is cached by the SW.
+  var News = (function () {
+    var NWS = 'https://api.weather.gov';
+    var RSS_URL = 'https://www.weather.gov/rss_page.php?site_name=nws';
+    var LD = 'application/ld+json';
+    var STALE_MS = 10 * 60 * 1000;
+    var NEWS_MOVED_M = 5000; // map center moved this far since the last load: load news for the new area
+    var HOUR = 3600 * 1000;
+    var GROUPS = [
+      { key: 'local', title: 'Your area' },
+      { key: 'tropical', title: 'Tropical storms' },
+      { key: 'us', title: 'United States' },
+      { key: 'world', title: 'World' }
+    ];
+    var TROPICAL_OFFICES = {
+      KNHC: { name: 'National Hurricane Center', link: 'https://www.nhc.noaa.gov/' },
+      PHFO: { name: 'Central Pacific Hurricane Center', link: 'https://www.nhc.noaa.gov/?cpac' },
+      PGUM: { name: 'NWS Guam', link: 'https://www.weather.gov/gum/' }
+    };
+    // WMO headings of the English outlooks. KNHC also sends Spanish copies (ACCA62, ABPZ21): skipped.
+    var TWO_AREAS = { ABNT20: 'Atlantic', ABPZ20: 'Eastern Pacific', ACPN50: 'Central Pacific' };
+    var news = { gen: 0, lastLoad: 0, pointCache: {}, officeNames: {}, textCache: {} };
+
+    function newsFetch(url, accept, signal, ms) {
+      return fetchWithTimeout(url, { headers: { Accept: accept || LD }, credentials: 'omit' }, ms || FETCH_TIMEOUT_MS, signal);
+    }
+    function getJson(url, accept, signal, ms) {
+      return newsFetch(url, accept, signal, ms).then(function (res) {
+        if (!res.ok) { var err = new Error('HTTP ' + res.status); err.status = res.status; throw err; }
+        return res.json();
+      });
+    }
+    /** One retry after 2 s for a server hiccup (api.weather.gov sometimes answers 500/503). */
+    function getJsonRetry(url, accept, signal) {
+      return getJson(url, accept, signal).catch(function (e) {
+        if (!(e && e.status >= 500)) throw e;
+        return new Promise(function (r) { setTimeout(r, 2000); }).then(function () { return getJson(url, accept, signal); });
+      });
+    }
+    function graph(json) { return json && Array.isArray(json['@graph']) ? json['@graph'] : []; }
+    function safeId(id) { return typeof id === 'string' && /^[A-Za-z0-9-]{1,80}$/.test(id) ? id : null; }
+    function date(s) { var d = new Date(s); return isNaN(d) ? null : d; }
+    function within(d, ms) { return d && Date.now() - d.getTime() <= ms; }
+
+    /** Newest product per group key (input is newest-first, but sort anyway). */
+    function newestBy(list, keyFn) {
+      var seen = {};
+      list.slice().sort(function (a, b) { return Date.parse(b.issuanceTime) - Date.parse(a.issuanceTime); })
+        .forEach(function (p) { var k = keyFn(p); if (!seen[k]) seen[k] = p; });
+      return Object.keys(seen).map(function (k) { return seen[k]; });
+    }
+
+    function productText(id, signal) {
+      if (news.textCache[id]) return Promise.resolve(news.textCache[id]);
+      return getJson(NWS + '/products/' + id, LD, signal).then(function (j) {
+        var t = j && typeof j.productText === 'string' ? j.productText : '';
+        if (t) news.textCache[id] = t;
+        return t;
+      });
+    }
+
+    // ----- feeds: each resolves to { items: [...] } or { message: '...' } -----
+    function lookupPoint(c, signal) {
+      var key = c.lat.toFixed(2) + ',' + c.lng.toFixed(2);
+      if (news.pointCache[key]) return Promise.resolve(news.pointCache[key]);
+      return getJsonRetry(NWS + '/points/' + c.lat.toFixed(4) + ',' + c.lng.toFixed(4), 'application/geo+json', signal)
+        .then(function (j) {
+          var p = (j && j.properties) || j || {};
+          var cwa = typeof p.cwa === 'string' && /^[A-Z]{3}$/.test(p.cwa) ? p.cwa : null;
+          if (!cwa) throw new Error('no office');
+          var rl = p.relativeLocation && p.relativeLocation.properties;
+          var place = rl && rl.city ? String(rl.city).slice(0, 80) + (rl.state ? ', ' + String(rl.state).slice(0, 4) : '') : '';
+          var out = { cwa: cwa, place: place };
+          news.pointCache[key] = out;
+          return out;
+        });
+    }
+
+    function officeLabel(cwa) { return 'NWS ' + (news.officeNames[cwa] || cwa); }
+
+    function loadLocal(c, signal) {
+      return lookupPoint(c, signal).then(function (pt) {
+        var codes = [
+          { code: 'AFD', maxAge: 72 * HOUR },
+          { code: 'HWO', maxAge: 36 * HOUR },
+          { code: 'SPS', maxAge: 24 * HOUR }
+        ];
+        return Promise.all(codes.map(function (k) {
+          return getJson(NWS + '/products/types/' + k.code + '/locations/' + pt.cwa, LD, signal).then(function (j) {
+            var p = graph(j)[0];
+            var d = p && date(p.issuanceTime);
+            var id = p && safeId(p.id);
+            if (!id || !within(d, k.maxAge)) return null;
+            return {
+              title: String(p.productName || k.code).slice(0, 200),
+              time: d, id: id,
+              link: 'https://forecast.weather.gov/product.php?site=' + pt.cwa + '&issuedby=' + pt.cwa + '&product=' + k.code
+            };
+          }).catch(function () { return null; });
+        })).then(function (items) {
+          items = items.filter(Boolean);
+          // The office's full name ("Denver/Boulder CO") is in the product text.
+          var first = items[0];
+          var named = news.officeNames[pt.cwa] || !first ? Promise.resolve() : productText(first.id, signal).then(function (t) {
+            var m = /^\s*National Weather Service (.{2,60}?)\s*$/m.exec(t || '');
+            if (m) news.officeNames[pt.cwa] = m[1];
+          }).catch(function () {});
+          return named.then(function () {
+            items.forEach(function (it) { it.source = officeLabel(pt.cwa); });
+            return {
+              items: items,
+              place: pt.place,
+              message: items.length ? '' : 'No new products from ' + officeLabel(pt.cwa) + ' right now.'
+            };
+          });
+        });
+      }, function (e) {
+        if (e && e.status === 404) return { message: 'Local office news is for the U.S. only. The map center is outside the U.S.' };
+        throw e;
+      });
+    }
+
+    function tropicalSource(office) {
+      var o = TROPICAL_OFFICES[office];
+      return o ? o.name : 'NWS ' + office;
+    }
+    function tropicalLink(office) {
+      var o = TROPICAL_OFFICES[office];
+      return o ? o.link : 'https://www.nhc.noaa.gov/';
+    }
+
+    function loadTropical(signal) {
+      var two = getJson(NWS + '/products/types/TWO', LD, signal).then(function (j) {
+        var list = graph(j).filter(function (p) {
+          if (p.issuingOffice === 'KNHC' && !TWO_AREAS[p.wmoCollectiveId]) return false;
+          return within(date(p.issuanceTime), 48 * HOUR) && safeId(p.id);
+        });
+        return newestBy(list, function (p) { return p.issuingOffice + '/' + String(p.wmoCollectiveId || ''); })
+          .map(function (p) {
+            var office = String(p.issuingOffice || '');
+            var area = TWO_AREAS[String(p.wmoCollectiveId || '')];
+            return {
+              title: 'Tropical Weather Outlook' + (area ? ' (' + area + ')' : ''),
+              time: date(p.issuanceTime), id: safeId(p.id),
+              source: tropicalSource(office), link: tropicalLink(office)
+            };
+          });
+      });
+      var tcp = getJson(NWS + '/products/types/TCP', LD, signal).then(function (j) {
+        var list = graph(j).filter(function (p) { return within(date(p.issuanceTime), 24 * HOUR) && safeId(p.id); });
+        var items = newestBy(list, function (p) { return p.issuingOffice + '/' + (p.wmoCollectiveId || p.id); }).slice(0, 6)
+          .map(function (p) {
+            var office = String(p.issuingOffice || '');
+            return {
+              title: String(p.productName || 'Tropical Cyclone Public Advisory').slice(0, 200),
+              time: date(p.issuanceTime), id: safeId(p.id),
+              source: tropicalSource(office), link: tropicalLink(office)
+            };
+          });
+        // Put the storm name in the title ("Hurricane Melissa Advisory Number 30") when we can.
+        return Promise.all(items.map(function (it) {
+          return productText(it.id, signal).then(function (t) {
+            var m = /^\s*([A-Za-z][A-Za-z .'-]{2,60} (Intermediate )?Advisory Number\s+\S+)\s*$/mi.exec(t || '');
+            if (m) it.title = m[1].replace(/\s+/g, ' ');
+          }).catch(function () {});
+        })).then(function () { return items; });
+      });
+      return Promise.all([
+        two.catch(function () { return null; }),
+        tcp.catch(function () { return null; })
+      ]).then(function (r) {
+        if (!r[0] && !r[1]) throw new Error('tropical failed');
+        var items = (r[1] || []).concat(r[0] || []);
+        return { items: items, message: items.length ? (r[1] && r[1].length ? '' : 'No active tropical storm advisories right now.') : 'No tropical storm news right now.' };
+      });
+    }
+
+    /** Decode the feed with its own charset (the NWS feed is ISO-8859-1). */
+    function readText(res) {
+      if (!res.arrayBuffer || typeof TextDecoder === 'undefined') return res.text();
+      var ct = (res.headers && res.headers.get('content-type')) || '';
+      return res.arrayBuffer().then(function (buf) {
+        var label = (/charset=["']?([\w-]+)/i.exec(ct) || [])[1];
+        if (!label) {
+          var head = new TextDecoder('iso-8859-1').decode(new Uint8Array(buf, 0, Math.min(200, buf.byteLength)));
+          label = (/encoding=["']([\w-]+)["']/i.exec(head) || [])[1] || 'utf-8';
+        }
+        try { return new TextDecoder(label).decode(buf); } catch (e) { return new TextDecoder('utf-8').decode(buf); }
+      });
+    }
+
+    function loadUs(signal) {
+      return newsFetch(RSS_URL, 'application/rss+xml, application/xml, text/xml', signal).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return readText(res);
+      }).then(function (xml) {
+        var items = parseRssItems(xml).slice(0, 6).map(function (it) {
+          return { title: it.title || 'NWS news', link: it.link, time: date(it.pubDate), source: 'NWS national' };
+        });
+        return { items: items, message: items.length ? '' : 'No national headlines right now.' };
+      });
+    }
+
+    function loadWorld(c, signal) {
+      return getJson(Weather.GDACS_API, 'application/json', signal, 25000).then(function (json) {
+        var list = (json && Array.isArray(json.features) ? json.features : []).map(Weather.gdacsEvent).filter(Boolean);
+        list.forEach(function (e) { e.dist = distanceMeters(c.lat, c.lng, e.lat, e.lon); });
+        var pick = list.filter(function (e) { return e.level === 'Red' || e.level === 'Orange'; });
+        list.slice().sort(function (a, b) { return a.dist - b.dist; }).slice(0, 3).forEach(function (e) {
+          if (pick.indexOf(e) < 0) pick.push(e);
+        });
+        var items = pick.slice(0, 12).map(function (e) {
+          return {
+            title: e.name,
+            sub: e.type + ' · ' + e.level + ' alert · ' + Math.round(e.dist / 1609.344).toLocaleString() + ' mi (' +
+              Math.round(e.dist / 1000).toLocaleString() + ' km) from the map center',
+            time: e.modified || e.from, link: e.report, source: 'GDACS'
+          };
+        });
+        return { items: items, message: items.length ? '' : 'No world disaster alerts right now.' };
+      });
+    }
+
+    // ----- rendering -----
+    function sortNewest(items) {
+      return items.slice().sort(function (a, b) { return (b.time ? b.time.getTime() : 0) - (a.time ? a.time.getTime() : 0); });
+    }
+
+    function readButton(it) {
+      var box = el('pre', { className: 'pre news-text', hidden: '' });
+      var boxId = 'news-text-' + it.id;
+      box.id = boxId;
+      var btn = el('button', { type: 'button', className: 'btn btn-small', text: 'Read', 'aria-expanded': 'false', 'aria-controls': boxId });
+      btn.addEventListener('click', function () {
+        var open = btn.getAttribute('aria-expanded') === 'true';
+        if (open) { box.hidden = true; btn.setAttribute('aria-expanded', 'false'); btn.textContent = 'Read'; return; }
+        box.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        btn.textContent = 'Hide';
+        if (box.getAttribute('data-loaded')) return;
+        box.textContent = 'Loading…';
+        productText(it.id).then(function (t) {
+          var lines = String(t || '').replace(/\r/g, '').split('\n');
+          while (lines.length && !lines[0].trim()) lines.shift();
+          box.textContent = lines.slice(0, 25).join('\n').trim() + (lines.length > 25 ? '\n…' : '') || 'No text.';
+          box.setAttribute('data-loaded', '1');
+        }).catch(function () {
+          box.textContent = 'Could not load the text. Use the link above to read it.';
+        });
+      });
+      return [btn, box];
+    }
+
+    function renderItem(it) {
+      var head = it.link
+        ? el('a', { className: 'news-title', href: it.link, target: '_blank', rel: 'noopener noreferrer', text: it.title })
+        : el('span', { className: 'news-title', text: it.title });
+      var when = it.time ? formatLocalTime(it.time) + ' (' + timeAgo(it.time) + ')' : 'Time not given';
+      var kids = [
+        el('div', null, [head]),
+        it.sub ? el('div', { className: 'news-sub', text: it.sub }) : null,
+        el('div', { className: 'alert-item-meta', text: it.source + ' · ' + when })
+      ];
+      if (it.id) kids = kids.concat(readButton(it));
+      return el('li', { className: 'news-item' }, kids);
+    }
+
+    function renderGroup(g, result) {
+      var sec = $('news-group-' + g.key);
+      clear(sec);
+      sec.appendChild(el('h3', { text: g.title }));
+      if (result.loading) { sec.appendChild(el('p', { className: 'hint', text: 'Loading…' })); return; }
+      if (result.error) { sec.appendChild(el('p', { className: 'hint', text: result.error })); return; }
+      var items = sortNewest(result.items || []);
+      if (items.length) sec.appendChild(el('ul', { className: 'alert-list news-items' }, items.map(renderItem)));
+      if (result.message) sec.appendChild(el('p', { className: 'hint', text: result.message }));
+    }
+
+    function ensureGroups() {
+      var list = $('news-list');
+      if (list.childElementCount) return;
+      GROUPS.forEach(function (g) {
+        list.appendChild(el('section', { id: 'news-group-' + g.key, className: 'news-group', 'aria-label': g.title }));
+      });
+    }
+
+    var FAIL = {
+      local: 'Could not get news from your local weather office right now.',
+      tropical: 'Could not get tropical storm news right now.',
+      us: 'Could not get national weather news right now.',
+      world: 'Could not get world disaster alerts right now.'
+    };
+
+    function load() {
+      var status = $('news-status');
+      ensureGroups();
+      if (!navigator.onLine) {
+        status.textContent = 'Weather news needs internet. Try again when you have signal.' +
+          (news.lastLoad ? ' Showing news from ' + formatLocalTime(new Date(news.lastLoad)) + '.' : '');
+        return;
+      }
+      var gen = ++news.gen;
+      if (news.ctrl) news.ctrl.abort();
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      news.ctrl = ctrl;
+      var signal = ctrl && ctrl.signal;
+      var c = state.map ? state.map.getCenter().wrap() : { lat: 39.8, lng: -98.6 };
+      status.textContent = 'Loading weather news…';
+      $('news-refresh').disabled = true;
+      var jobs = {
+        local: function () { return loadLocal(c, signal); },
+        tropical: function () { return loadTropical(signal); },
+        us: function () { return loadUs(signal); },
+        world: function () { return loadWorld(c, signal); }
+      };
+      var place = '';
+      Promise.all(GROUPS.map(function (g) {
+        renderGroup(g, { loading: true });
+        var p;
+        try { p = Promise.resolve(jobs[g.key]()); } catch (e) { p = Promise.reject(e); }
+        return p.then(function (r) {
+          if (gen !== news.gen) return false;
+          if (r && r.place) place = r.place;
+          renderGroup(g, r || {});
+          return true;
+        }, function () {
+          if (gen !== news.gen) return false;
+          renderGroup(g, { error: FAIL[g.key] + (navigator.onLine ? ' Tap Refresh to try again.' : '') });
+          return false;
+        });
+      })).then(function (ok) {
+        if (gen !== news.gen) return;
+        $('news-refresh').disabled = false;
+        news.lastLoad = Date.now();
+        news.center = { lat: c.lat, lng: c.lng };
+        var good = ok.filter(Boolean).length;
+        status.textContent = good
+          ? 'Updated ' + formatLocalTime(new Date()) + '. News for the map center' + (place ? ' (near ' + place + ')' : '') + '.'
+          : 'Could not get weather news right now. Tap Refresh to try again.';
+      });
+    }
+
+    function open(opener) {
+      openSheet('sheet-news', opener);
+      var moved = false;
+      if (news.center && state.map) {
+        var c = state.map.getCenter().wrap();
+        moved = distanceMeters(news.center.lat, news.center.lng, c.lat, c.lng) > NEWS_MOVED_M;
+      }
+      if (!news.lastLoad || moved || Date.now() - news.lastLoad > STALE_MS) load();
+    }
+
+    function init() {
+      $('btn-news').addEventListener('click', function () {
+        // The news panel replaces the Weather sheet; focus returns to the Weather button.
+        open($('btn-weather'));
+      });
+      $('news-refresh').addEventListener('click', load);
+    }
+
+    return { init: init, load: load, state: news };
+  })();
+  ReadyMap.news = { state: News.state };
+
+  // ---------------------------------------------------------------------------
+  // 14c. Local weather card (one point: GPS, else the selected spot, else the map center)
+  // ---------------------------------------------------------------------------
+  // U.S.: api.weather.gov (points -> forecast, hourly, nearest station, alerts). Elsewhere, or when
+  // points says 404: Open-Meteo. Results live only in memory (never in the SW cache), keyed by the
+  // point rounded to 2 decimals. A result is reused for any point within 2 km; nothing is fetched
+  // again for the same area within 5 minutes. All feed text goes on the page with textContent.
+  var LocalWx = (function () {
+    var NWS = 'https://api.weather.gov';
+    var NWS_RE = /^https:\/\/api\.weather\.gov\//;
+    var GEO = 'application/geo+json';
+    var OPEN_METEO = 'https://api.open-meteo.com/v1/forecast';
+    var MIN_GAP_MS = 5 * 60 * 1000;
+    var REFRESH_MS = 15 * 60 * 1000;
+    var TICK_MS = 60 * 1000;
+    var SAME_AREA_M = 2000;
+    var OBS_OLD_MS = 2 * 3600 * 1000;
+    var GDACS_NEAR_M = 300000;
+    var lw = { opened: false, cache: {}, attempts: {}, points: {}, last: null, gen: 0, ctrl: null, busy: false, timer: null,
+      gdacs: null, gdacsFlight: null };
+
+    function keyOf(pt) { return pt.lat.toFixed(2) + ',' + pt.lon.toFixed(2); }
+
+    /** GPS fix first; with no fix, the tapped/selected spot; with neither, the map center. */
+    function pickPoint() {
+      if (state.userFix) return { lat: state.userFix.lat, lon: state.userFix.lon, kind: 'Your location' };
+      var s = state.selected;
+      if (s && s.source !== 'user') return { lat: s.lat, lon: s.lon, kind: 'Map point' };
+      var c = state.map ? state.map.getCenter().wrap() : { lat: DEFAULT_CENTER[0], lng: DEFAULT_CENTER[1] };
+      return { lat: c.lat, lon: c.lng, kind: 'Map point', center: true };
+    }
+
+    /** Freshest saved result within 2 km of pt, or null. */
+    function nearResult(pt) {
+      var best = null;
+      Object.keys(lw.cache).forEach(function (k) {
+        var r = lw.cache[k];
+        if (distanceMeters(r.lat, r.lon, pt.lat, pt.lon) > SAME_AREA_M) return;
+        if (!best || r.fetchedAt > best.fetchedAt) best = r;
+      });
+      return best;
+    }
+
+    /** Most recent request start within 2 km of pt (success or not), or null. */
+    function nearAttempt(pt) {
+      var best = null;
+      Object.keys(lw.attempts).forEach(function (k) {
+        var a = lw.attempts[k];
+        if (distanceMeters(a.lat, a.lon, pt.lat, pt.lon) > SAME_AREA_M) return;
+        if (!best || a.at > best.at) best = a;
+      });
+      return best;
+    }
+
+    // ----- fetch helpers (only Accept is ever sent; browsers do not allow setting User-Agent) -----
+    function getJson(url, accept, signal) {
+      var opts = { credentials: 'omit' };
+      if (accept) opts.headers = { Accept: accept };
+      return fetchWithTimeout(url, opts, FETCH_TIMEOUT_MS, signal).then(function (res) {
+        if (!res.ok) { var e = new Error('HTTP ' + res.status); e.status = res.status; throw e; }
+        return res.json();
+      });
+    }
+    /** One retry after 2 s when the server has a hiccup (500/503). */
+    function getJsonRetry(url, accept, signal) {
+      return getJson(url, accept, signal).catch(function (e) {
+        if (!(e && e.status >= 500)) throw e;
+        return new Promise(function (r) { setTimeout(r, 2000); }).then(function () { return getJson(url, accept, signal); });
+      });
+    }
+    function num(v) { return v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v); }
+    function str(v, max) { return typeof v === 'string' ? v.slice(0, max || 120) : ''; }
+    /** A WMO/NWS quantity {unitCode, value} as mph. */
+    function qMph(q) {
+      var v = q && num(q.value);
+      if (v === null) return null;
+      var u = String(q.unitCode || '');
+      if (/m_s-1/.test(u)) return v * 2.236936;
+      if (/km_h-1/.test(u)) return v / 1.609344;
+      if (/kn|kt/.test(u)) return v * 1.150779;
+      return v / 1.609344; // api.weather.gov default is km/h
+    }
+    function qTempF(q) {
+      var v = q && num(q.value);
+      if (v === null) return null;
+      return /degF/.test(String(q.unitCode || '')) ? v : cToF(v);
+    }
+    function periodTempF(p) {
+      var t = num(p && p.temperature);
+      if (t === null) return null;
+      return p.temperatureUnit === 'C' ? cToF(t) : t;
+    }
+    function periodPop(p) { return p && p.probabilityOfPrecipitation ? num(p.probabilityOfPrecipitation.value) : null; }
+
+    // ----- U.S. (National Weather Service) -----
+    function nwsPoint(pt, signal) {
+      var key = keyOf(pt);
+      if (lw.points[key]) return Promise.resolve(lw.points[key]);
+      return getJsonRetry(NWS + '/points/' + pt.lat.toFixed(4) + ',' + pt.lon.toFixed(4), GEO, signal).then(function (j) {
+        var p = (j && j.properties) || {};
+        var rl = p.relativeLocation && p.relativeLocation.properties;
+        var out = {
+          forecast: NWS_RE.test(p.forecast) ? p.forecast : null,
+          hourly: NWS_RE.test(p.forecastHourly) ? p.forecastHourly : null,
+          stations: NWS_RE.test(p.observationStations) ? p.observationStations : null,
+          place: rl && rl.city ? str(rl.city, 80) + (rl.state ? ', ' + str(rl.state, 4) : '') : ''
+        };
+        lw.points[key] = out;
+        return out;
+      });
+    }
+
+    function nwsHourly(j) {
+      var now = Date.now();
+      var list = (j && j.properties && Array.isArray(j.properties.periods) ? j.properties.periods : []);
+      return list.filter(function (p) { return p && !(Date.parse(p.endTime) <= now); }).slice(0, 24).map(function (p) {
+        return {
+          time: str(p.startTime, 40), tempF: periodTempF(p), sky: str(p.shortForecast, 80), pop: periodPop(p),
+          wind: [str(p.windSpeed, 30), str(p.windDirection, 4)].filter(Boolean).join(' ')
+        };
+      });
+    }
+
+    function nwsDaily(j) {
+      var list = (j && j.properties && Array.isArray(j.properties.periods) ? j.properties.periods : []).filter(Boolean);
+      var out = [];
+      for (var i = 0; i < list.length && out.length < 8; i++) {
+        var p = list[i];
+        var night = p.isDaytime && list[i + 1] && !list[i + 1].isDaytime ? list[i + 1] : null;
+        var pops = [periodPop(p), periodPop(night)].filter(function (v) { return v !== null; });
+        out.push({
+          name: str(p.name, 30) || 'Day',
+          hiF: p.isDaytime ? periodTempF(p) : null,
+          loF: p.isDaytime ? periodTempF(night) : periodTempF(p),
+          sky: str(p.shortForecast, 80),
+          pop: pops.length ? Math.max.apply(null, pops) : null
+        });
+        if (night) i++;
+      }
+      return out;
+    }
+
+    function nwsNow(pt, stationsUrl, signal) {
+      if (!stationsUrl) return Promise.reject(new Error('no stations'));
+      return getJsonRetry(stationsUrl + '?limit=1', GEO, signal).then(function (j) {
+        var f = j && Array.isArray(j.features) ? j.features[0] : null;
+        var sp = (f && f.properties) || {};
+        var id = /^[A-Z0-9]{3,6}$/.test(sp.stationIdentifier) ? sp.stationIdentifier : null;
+        if (!id) throw new Error('no station');
+        return getJsonRetry(NWS + '/stations/' + id + '/observations/latest', GEO, signal).then(function (o) {
+          var p = (o && o.properties) || {};
+          var tF = qTempF(p.temperature);
+          var feels = qTempF(p.heatIndex);
+          if (feels === null) feels = qTempF(p.windChill);
+          var when = p.timestamp ? new Date(p.timestamp) : null;
+          return {
+            tempF: tF, feelsF: feels === null ? tF : feels, sky: str(p.textDescription, 80),
+            windMph: qMph(p.windSpeed), windDeg: p.windDirection ? num(p.windDirection.value) : null,
+            gustMph: qMph(p.windGust), humidity: p.relativeHumidity ? num(p.relativeHumidity.value) : null,
+            obsTime: when && !isNaN(when) ? when : null,
+            station: id + (sp.name ? ' (' + str(sp.name, 80) + ')' : '')
+          };
+        });
+      });
+    }
+
+    function nwsAlerts(pt, signal) {
+      return getJsonRetry(Weather.ALERTS_API + '?point=' + pt.lat.toFixed(4) + ',' + pt.lon.toFixed(4), GEO, signal)
+        .then(function (j) { return { us: true, features: Weather.alertFeatures(j) }; });
+    }
+
+    function loadNws(pt, info, signal) {
+      var settle = function (p) { return p.then(function (v) { return v; }, function () { return null; }); };
+      return Promise.all([
+        settle(info.forecast ? getJsonRetry(info.forecast, GEO, signal).then(nwsDaily) : Promise.reject()),
+        settle(info.hourly ? getJsonRetry(info.hourly, GEO, signal).then(nwsHourly) : Promise.reject()),
+        settle(nwsNow(pt, info.stations, signal)),
+        settle(nwsAlerts(pt, signal))
+      ]).then(function (r) {
+        var res = { src: 'nws', place: info.place, daily: r[0] || [], hourly: r[1] || [], now: r[2], alerts: r[3] || { us: true, failed: true } };
+        if (!res.daily.length && !res.hourly.length) {
+          // NWS forecast is down: use Open-Meteo for the forecast, keep NWS warnings and place.
+          return loadOpenMeteo(pt, signal).then(function (om) {
+            om.place = info.place; om.alerts = res.alerts; om.src = 'mixed';
+            if (res.now && res.now.tempF !== null) { om.now = res.now; }
+            return om;
+          }, function () {
+            if (!res.now) throw new Error('nws failed');
+            return res;
+          });
+        }
+        var n = res.now;
+        if (!n || n.tempF === null) {
+          // No station reading: use the first hour of the forecast instead.
+          var h = res.hourly[0];
+          if (h) res.now = { tempF: h.tempF, feelsF: h.tempF, sky: h.sky, windText: h.wind, humidity: null, fromForecast: true,
+            station: n ? n.station : '' };
+        }
+        return res;
+      });
+    }
+
+    // ----- Outside the U.S. (Open-Meteo) -----
+    function loadOpenMeteo(pt, signal) {
+      var url = OPEN_METEO + '?latitude=' + pt.lat.toFixed(4) + '&longitude=' + pt.lon.toFixed(4) +
+        '&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day' +
+        '&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m' +
+        '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max' +
+        '&forecast_days=7&forecast_hours=24&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph';
+      return getJsonRetry(url, null, signal).then(function (j) {
+        var c = (j && j.current) || {};
+        var h = (j && j.hourly) || {};
+        var d = (j && j.daily) || {};
+        var at = function (arr, i) { return Array.isArray(arr) ? arr[i] : null; };
+        var hourly = (Array.isArray(h.time) ? h.time : []).slice(0, 24).map(function (t, i) {
+          var w = num(at(h.wind_speed_10m, i));
+          return { time: str(t, 40), tempF: num(at(h.temperature_2m, i)), sky: wmoCodeText(at(h.weather_code, i)),
+            pop: num(at(h.precipitation_probability, i)), wind: w === null ? '' : Math.round(w) + ' mph' };
+        });
+        var daily = (Array.isArray(d.time) ? d.time : []).slice(0, 7).map(function (t, i) {
+          return { date: str(t, 10), name: i === 0 ? 'Today' : dayName(str(t, 10)), hiF: num(at(d.temperature_2m_max, i)),
+            loF: num(at(d.temperature_2m_min, i)), sky: wmoCodeText(at(d.weather_code, i)), pop: num(at(d.precipitation_probability_max, i)) };
+        });
+        if (num(c.temperature_2m) === null && !hourly.length) throw new Error('empty');
+        return {
+          src: 'om', place: '', hourly: hourly, daily: daily,
+          now: { tempF: num(c.temperature_2m), feelsF: num(c.apparent_temperature), sky: c.weather_code !== undefined ? wmoCodeText(c.weather_code) : '',
+            windMph: num(c.wind_speed_10m), windDeg: num(c.wind_direction_10m), gustMph: num(c.wind_gusts_10m),
+            humidity: num(c.relative_humidity_2m), localTime: str(c.time, 20) },
+          alerts: { us: false }
+        };
+      });
+    }
+
+    function fetchFor(pt, signal) {
+      return nwsPoint(pt, signal).then(function (info) { return loadNws(pt, info, signal); }, function (e) {
+        if (e && e.name === 'AbortError' && signal && signal.aborted) throw e;
+        // 404 = outside the U.S.; any other points failure: Open-Meteo still gives a forecast.
+        return loadOpenMeteo(pt, signal);
+      });
+    }
+
+    // ----- formatting -----
+    var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    function dayName(ymd) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+      return m ? DAYS[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()] : ymd;
+    }
+    /** Hour from the local part of an ISO time (local to the point): '2026-11-02T15:00-07:00' -> '3 PM'. */
+    function hourLabel(iso) {
+      var m = /T(\d{2}):(\d{2})/.exec(iso || '');
+      if (!m) return '';
+      var h = +m[1];
+      return (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? ' AM' : ' PM');
+    }
+    function tempBoth(f) {
+      if (f === null || f === undefined) return '—';
+      return Math.round(f) + '°F / ' + Math.round(fToC(f)) + '°C';
+    }
+    function tempShort(f) { return f === null || f === undefined ? '—' : Math.round(f) + '°F'; }
+    function tempShortC(f) { return f === null || f === undefined ? '' : Math.round(fToC(f)) + '°C'; }
+    function windText(n) {
+      if (n.windText) return n.windText;
+      if (n.windMph === null || n.windMph === undefined) return '—';
+      var mph = Math.round(n.windMph);
+      if (mph === 0) return 'Calm';
+      var dir = degToCompass(n.windDeg);
+      var s = mph + ' mph' + (dir ? ' from the ' + compassWords(dir) + ' (' + dir + ')' : '');
+      if (n.gustMph !== null && n.gustMph !== undefined && Math.round(n.gustMph) > mph) s += ', gusts ' + Math.round(n.gustMph) + ' mph';
+      return s;
+    }
+    function rainText(pop) { return pop === null || pop === undefined ? 'Rain —' : 'Rain ' + Math.round(pop) + '%'; }
+    function sourceName(r) {
+      return r.src === 'om' ? 'Open-Meteo' : r.src === 'mixed' ? 'National Weather Service and Open-Meteo' : 'National Weather Service';
+    }
+
+    // ----- rendering -----
+    function status(text) { $('localwx-status').textContent = text || ''; }
+
+    function renderPlace(r) {
+      var where = r.place || formatDecimal(r.lat, r.lon);
+      $('localwx-place').textContent = r.kind + (r.center ? ' (map center)' : '') + ': ' + where;
+    }
+
+    function renderNow(r) {
+      var box = $('localwx-now');
+      clear(box);
+      var n = r.now;
+      if (!n) { box.appendChild(el('p', { className: 'hint', text: 'Current conditions are not available right now.' })); return; }
+      box.appendChild(el('p', { className: 'lw-temp', text: tempBoth(n.tempF) }));
+      if (n.sky) box.appendChild(el('p', { className: 'lw-sky', text: n.sky }));
+      var dl = el('dl', { className: 'lw-facts' });
+      [['Feels like', tempBoth(n.feelsF)], ['Wind', windText(n)],
+        ['Humidity', n.humidity === null || n.humidity === undefined ? '—' : Math.round(n.humidity) + '%']].forEach(function (row) {
+        dl.appendChild(el('dt', { text: row[0] }));
+        dl.appendChild(el('dd', { text: row[1] }));
+      });
+      box.appendChild(dl);
+      if (n.fromForecast) box.appendChild(el('p', { className: 'fine', text: 'No weather station reading right now. This is the forecast for this hour.' }));
+      else if (n.obsTime && Date.now() - n.obsTime.getTime() > OBS_OLD_MS) {
+        box.appendChild(el('p', { className: 'fine', text: 'This station reading is old (' + timeAgo(n.obsTime) + ').' }));
+      }
+    }
+
+    function renderHourly(r) {
+      var list = $('localwx-hourly');
+      clear(list);
+      if (!r.hourly.length) { list.appendChild(el('li', { className: 'lw-empty', text: 'Hourly forecast is not available right now.' })); return; }
+      r.hourly.forEach(function (h, i) {
+        list.appendChild(el('li', { className: 'hour' }, [
+          el('span', { className: 'lw-h-time', text: i === 0 ? 'Now' : hourLabel(h.time) }),
+          el('span', { className: 'lw-h-temp', text: tempShort(h.tempF) }),
+          el('span', { className: 'lw-h-c', text: tempShortC(h.tempF) }),
+          el('span', { className: 'lw-h-sky', text: h.sky || '—' }),
+          el('span', { className: 'lw-h-rain', text: rainText(h.pop) }),
+          el('span', { className: 'lw-h-wind', text: h.wind ? 'Wind ' + h.wind : '' })
+        ]));
+      });
+    }
+
+    function renderDaily(r) {
+      var list = $('localwx-daily');
+      clear(list);
+      if (!r.daily.length) { list.appendChild(el('li', { className: 'lw-empty', text: 'The 7-day forecast is not available right now.' })); return; }
+      r.daily.forEach(function (d) {
+        var temps = [];
+        if (d.hiF !== null && d.hiF !== undefined) temps.push('High ' + tempBoth(d.hiF));
+        if (d.loF !== null && d.loF !== undefined) temps.push('Low ' + tempBoth(d.loF));
+        list.appendChild(el('li', { className: 'day' }, [
+          el('div', { className: 'lw-d-name', text: d.name }),
+          el('div', { className: 'lw-d-temps', text: temps.join(' · ') || '—' }),
+          el('div', { className: 'lw-d-sky', text: (d.sky || '—') + ' · ' + rainText(d.pop) })
+        ]));
+      });
+    }
+
+    function renderAlerts(r) {
+      var box = $('localwx-alerts');
+      clear(box);
+      var a = r.alerts || {};
+      if (a.us) {
+        if (a.failed) { box.appendChild(el('p', { text: 'Could not check weather warnings right now. Tap Refresh to try again.' })); return; }
+        if (!a.features.length) { box.appendChild(el('p', { text: 'No active weather warnings for this spot right now.' })); return; }
+        box.appendChild(el('p', { text: a.features.length + ' active warning' + (a.features.length === 1 ? '' : 's') + ' for this spot:' }));
+        var ul = el('ul', { className: 'alert-list' });
+        a.features.forEach(function (f) {
+          var p = f.properties;
+          var li = el('li', null, [
+            el('div', { className: 'alert-item-title', text: p.event || 'Weather alert' }),
+            el('div', { className: 'alert-item-meta', text: (p.severity || 'Unknown') + (p.ends || p.expires ? ' · Ends ' + formatLocalTime(p.ends || p.expires) : '') }),
+            el('button', { type: 'button', className: 'btn', text: 'Read more', 'aria-label': 'Read more about ' + (p.event || 'this alert'),
+              on: { click: function (e) { Weather.openAlert(f, e.currentTarget); } } })
+          ]);
+          li.style.borderLeftColor = severityColor(p.severity);
+          ul.appendChild(li);
+        });
+        box.appendChild(ul);
+        return;
+      }
+      box.appendChild(el('p', { text: 'Official warnings: this country\'s weather warnings are not in this app. ' +
+        'See World disaster alerts (GDACS) in the Weather sheet, and follow local officials.' }));
+      var near = el('div', { className: 'lw-gdacs' }, [el('p', { className: 'hint', text: 'Checking world disaster alerts near this spot…' })]);
+      box.appendChild(near);
+      gdacsNear(r).then(function (list) {
+        if (!document.contains(near)) return;
+        clear(near);
+        if (!list.length) { near.appendChild(el('p', { className: 'hint', text: 'No GDACS disaster alerts within 300 km (190 mi) right now.' })); return; }
+        near.appendChild(el('p', { text: 'GDACS disaster alerts within 300 km (190 mi):' }));
+        var ul = el('ul', { className: 'alert-list' });
+        list.forEach(function (e) {
+          var li = el('li', { className: 'gdacs-item' }, [
+            el('div', { className: 'alert-item-title', text: e.type + ': ' + e.name }),
+            el('div', { className: 'alert-item-meta', text: e.level + ' alert · ' + formatDistance(e.d) + ' away' +
+              (e.modified ? ' · Updated ' + formatLocalTime(e.modified) : '') })
+          ]);
+          if (e.report) li.appendChild(el('a', { href: e.report, target: '_blank', rel: 'noopener noreferrer', text: 'GDACS report' }));
+          li.style.borderLeftColor = e.level === 'Red' ? '#d32f2f' : e.level === 'Orange' ? '#f57c00' : '#2e7d32';
+          ul.appendChild(li);
+        });
+        near.appendChild(ul);
+      }, function () {
+        if (!document.contains(near)) return;
+        clear(near);
+        near.appendChild(el('p', { className: 'hint', text: 'Could not check world disaster alerts right now.' }));
+      });
+    }
+
+    /** GDACS events within 300 km. Reuses the World disaster alerts layer data when it is on. */
+    function gdacsNear(r) {
+      var have = Weather.state.gdacs.features;
+      var listP;
+      if (have && have.length) listP = Promise.resolve(have);
+      else if (lw.gdacs && Date.now() - lw.gdacs.at < REFRESH_MS) listP = Promise.resolve(lw.gdacs.list);
+      else if (!navigator.onLine) listP = Promise.reject(new Error('offline'));
+      else {
+        if (!lw.gdacsFlight) {
+          lw.gdacsFlight = getJson(Weather.GDACS_API, 'application/json').then(function (j) {
+            var list = (j && Array.isArray(j.features) ? j.features : []).map(Weather.gdacsEvent).filter(Boolean);
+            lw.gdacs = { at: Date.now(), list: list };
+            return list;
+          }).finally(function () { lw.gdacsFlight = null; });
+        }
+        listP = lw.gdacsFlight;
+      }
+      return listP.then(function (list) {
+        return list.map(function (e) { return { e: e, d: distanceMeters(r.lat, r.lon, e.lat, e.lon) }; })
+          .filter(function (x) { return x.d <= GDACS_NEAR_M; })
+          .sort(function (a, b) { return a.d - b.d; }).slice(0, 5)
+          .map(function (x) { var o = Object.assign({}, x.e); o.d = x.d; return o; });
+      });
+    }
+
+    function renderSource(r) {
+      var box = $('localwx-source');
+      clear(box);
+      var parts = ['Source: ' + sourceName(r) + '.'];
+      var n = r.now;
+      if (n && n.station && !n.fromForecast) {
+        parts.push('Now: weather station ' + n.station + (n.obsTime ? ', reading at ' + formatLocalTime(n.obsTime) : '') + '.');
+      } else if (r.src === 'om' && n && n.localTime) {
+        parts.push('Model data (not a weather station), for ' + hourLabel(n.localTime) + ' local time there.');
+      }
+      box.appendChild(textNode(parts.join(' ') + ' '));
+      if (r.src !== 'nws') {
+        box.appendChild(el('a', { href: 'https://open-meteo.com/', target: '_blank', rel: 'noopener noreferrer', text: 'Weather data by Open-Meteo.com' }));
+        box.appendChild(textNode(' (CC BY 4.0).'));
+      } else {
+        box.appendChild(el('a', { href: 'https://forecast.weather.gov/MapClick.php?lat=' + r.lat.toFixed(4) + '&lon=' + r.lon.toFixed(4),
+          target: '_blank', rel: 'noopener noreferrer', text: 'Full forecast at weather.gov' }));
+      }
+    }
+
+    function renderUpdated(r, saved) {
+      var t = formatLocalTime(new Date(r.fetchedAt));
+      $('localwx-updated').textContent = saved
+        ? 'Updated ' + t + '. Saved from ' + t + ': this is the last weather we got, not new.'
+        : 'Updated ' + t + '.';
+    }
+
+    function render(r, saved) {
+      renderPlace(r);
+      renderNow(r);
+      renderHourly(r);
+      renderDaily(r);
+      renderAlerts(r);
+      renderSource(r);
+      renderUpdated(r, saved);
+    }
+
+    function showSavedOr(msg) {
+      var r = nearResult(pickPoint()) || lw.last;
+      if (r) { render(r, true); status(msg + ' Showing weather saved from ' + formatLocalTime(new Date(r.fetchedAt)) + '.'); }
+      else {
+        status(msg);
+        $('localwx-updated').textContent = 'Updated: not yet.';
+      }
+    }
+
+    /** Get weather for the current point. force = the user tapped Refresh. */
+    function load(force) {
+      var pt = pickPoint();
+      // Offline: anything shown is saved, never "current".
+      if (!navigator.onLine) { showSavedOr('Local weather needs internet. Try again when you have signal.'); return Promise.resolve(null); }
+      var have = nearResult(pt);
+      if (have && Date.now() - have.fetchedAt < MIN_GAP_MS) {
+        render(have, false);
+        status(force ? 'Already up to date. New weather can be checked after ' +
+          formatLocalTime(new Date(have.fetchedAt + MIN_GAP_MS)) + '.' : '');
+        return Promise.resolve(have);
+      }
+      // The 5-minute gap also applies to attempts that failed (the one built-in retry is part of an attempt).
+      var tried = nearAttempt(pt);
+      if (tried && Date.now() - tried.at < MIN_GAP_MS) {
+        showSavedOr('Could not get the weather a moment ago. You can try again after ' +
+          formatLocalTime(new Date(tried.at + MIN_GAP_MS)) + '.');
+        return Promise.resolve(null);
+      }
+      var attemptKey = keyOf(pt);
+      lw.attempts[attemptKey] = { lat: pt.lat, lon: pt.lon, at: Date.now() };
+      var gen = ++lw.gen;
+      if (lw.ctrl) lw.ctrl.abort();
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      lw.ctrl = ctrl;
+      lw.busy = true;
+      $('localwx-refresh').disabled = true;
+      status('Getting the weather…');
+      if (!have && !lw.last) $('localwx-place').textContent = pt.kind + ': ' + formatDecimal(pt.lat, pt.lon);
+      return fetchFor(pt, ctrl && ctrl.signal).then(function (r) {
+        if (gen !== lw.gen) return null;
+        r.lat = pt.lat; r.lon = pt.lon; r.kind = pt.kind; r.center = !!pt.center; r.fetchedAt = Date.now();
+        lw.cache[keyOf(pt)] = r;
+        lw.last = r;
+        render(r, false);
+        status('');
+        return r;
+      }, function () {
+        // A failure caused by losing signal does not count: try again as soon as we are back online.
+        if (!navigator.onLine) delete lw.attempts[attemptKey];
+        if (gen !== lw.gen) return null;
+        showSavedOr(navigator.onLine ? 'Could not get the weather right now. Tap Refresh to try again.'
+          : 'Local weather needs internet. Try again when you have signal.');
+        return null;
+      }).finally(function () {
+        if (gen === lw.gen) { lw.busy = false; $('localwx-refresh').disabled = false; }
+      });
+    }
+
+    function open() {
+      lw.opened = true;
+      // The card replaces the Weather sheet; focus returns to the Weather button.
+      openSheet('sheet-localwx', $('btn-weather'));
+      var r = nearResult(pickPoint());
+      if (r && navigator.onLine && Date.now() - r.fetchedAt < REFRESH_MS) { render(r, false); status(''); }
+      else load(false);
+      schedule();
+    }
+
+    /** Auto-refresh: every 15 min (or after moving > 2 km) while GPS is on and the card was opened once. */
+    function tick() {
+      if (!lw.opened || state.watchId === null || document.hidden || lw.busy) return;
+      var r = nearResult(pickPoint());
+      if (!r || Date.now() - r.fetchedAt >= REFRESH_MS) load(false);
+    }
+    function schedule() {
+      clearInterval(lw.timer);
+      lw.timer = null;
+      if (!lw.opened || document.hidden) return;
+      lw.timer = setInterval(tick, TICK_MS);
+    }
+
+    function init() {
+      $('btn-localwx').addEventListener('click', open);
+      $('localwx-refresh').addEventListener('click', function () { load(true); });
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { clearInterval(lw.timer); lw.timer = null; return; }
+        schedule();
+        tick();
+      });
+      window.addEventListener('online', function () { if (lw.opened && !$('sheet-localwx').hidden) load(false); });
+    }
+
+    return { init: init, load: load, state: lw };
+  })();
+  ReadyMap.localWeather = { state: LocalWx.state };
 
   // ---------------------------------------------------------------------------
   // 15. Startup
@@ -2280,6 +4274,8 @@
     renderPoint();
     initNet();
     Weather.init();
+    try { News.init(); } catch (e) { /* news panel is optional */ }
+    try { LocalWx.init(); } catch (e) { /* local weather card is optional */ }
     updateLayoutVars();
     $('about-example').textContent = buildSpotUrl(40.7608, -111.891, 'Meeting spot', 15);
     registerServiceWorker();

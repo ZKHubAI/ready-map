@@ -125,6 +125,17 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
   font-weight: 600;
 }
 .status-banner.is-error { background: #FFE4E6; border-bottom-color: #FDA4AF; }
+.status-banner .banner-btn {
+  min-height: 40px; padding: 6px 14px; margin: 4px 6px 0 0; font: inherit; font-weight: 700;
+  border: 2px solid var(--ink); border-radius: 10px; background: #FFFFFF; color: var(--ink); cursor: pointer;
+}
+.status-banner .banner-action { display: inline-block; margin: 4px 6px 0 0; }
+.status-banner .share-box {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 6px; min-height: 64px;
+  font: inherit; font-weight: 400; padding: 8px; border: 1px solid #FDBA74; border-radius: 8px;
+  background: #FFFFFF; color: var(--ink); resize: none;
+  -webkit-user-select: text; user-select: text;
+}
 
 /* ---------- Map ---------- */
 .map-wrap { flex: 1 1 auto; min-height: 0; position: relative; display: flex; }
@@ -357,7 +368,38 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .legend-img { display: block; max-width: 100%; margin-top: 8px; }
 .sev-legend { list-style: none; padding: 0 !important; }
 .sev-legend li { display: flex; align-items: center; gap: 8px; }
-.sev-swatch { display: inline-block; width: 22px; height: 16px; border-radius: 3px; border: 1px solid rgba(0,0,0,.3); }
+.sev-swatch { display: inline-block; width: 22px; height: 16px; border-radius: 3px; border: 1px solid rgba(0,0,0,.3); flex: 0 0 auto; }
+
+/* Ocean group (inside the Weather sheet) */
+.wx-group { margin-top: 18px; padding-top: 10px; border-top: 2px solid var(--line); }
+.wx-group-title { margin: 0 0 4px; }
+.legend-bar { height: 16px; border-radius: 4px; border: 1px solid var(--line); }
+.legend-ticks { position: relative; height: 1.4em; margin-top: 2px; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.legend-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.legend-ticks span:first-child { transform: none; }
+.legend-ticks span:last-child { transform: translateX(-100%); }
+
+.hint-strong { color: var(--ink); font-weight: 700; }
+.legend-arrow { display: inline-block; width: 22px; text-align: center; font-weight: 900; font-size: 1.2rem; flex: 0 0 auto; }
+
+/* World disaster alerts (GDACS): level shown by color AND a letter */
+.gdacs-dot {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 2px solid #1C1917; font-weight: 900; font-size: 13px; line-height: 1;
+  box-shadow: 0 1px 3px rgba(0,0,0,.45);
+}
+.gdacs-red { background: #C62828; color: #FFFFFF; }
+.gdacs-orange { background: #EF6C00; color: #FFFFFF; }
+.gdacs-green { background: #2E7D32; color: #FFFFFF; }
+.gdacs-unknown { background: #607D8B; color: #FFFFFF; }
+.gdacs-icon { background: transparent; border: 0; }
+.gdacs-icon .gdacs-dot { width: 100%; height: 100%; box-sizing: border-box; }
+.gdacs-pop { min-width: 180px; max-width: 240px; }
+.gdacs-pop p { margin: 0 0 4px; overflow-wrap: anywhere; }
+.gdacs-pop .gdacs-pop-title { font-weight: 800; }
+.gdacs-item-head { display: flex; align-items: center; gap: 8px; }
+.alert-list li.gdacs-item .btn { margin-top: 6px; }
 
 .alert-list li { border-left-width: 8px; }
 .alert-item-title { font-weight: 800; }
@@ -384,3 +426,36 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 @media (forced-colors: active) {
   .toggle-track, .btn, .chip { border: 2px solid ButtonText; }
 }
+
+/* Weather news */
+.news-open { flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; margin: 4px 0 8px; text-align: left; }
+.news-group h3 { margin-top: 16px; }
+.alert-list.news-items li { border-left-width: 1px; }
+.news-title { font-weight: 800; overflow-wrap: anywhere; }
+.news-sub { font-size: 0.92rem; overflow-wrap: anywhere; }
+.news-item .btn { margin-top: 6px; }
+.news-text { font-size: 0.85rem; background: #FAFAF9; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-top: 6px; max-height: 50vh; overflow: auto; overflow-wrap: anywhere; }
+
+/* Local weather card */
+.lw-place { font-weight: 800; font-size: 1.05rem; margin-bottom: 8px; overflow-wrap: anywhere; }
+.lw-now .lw-temp { font-size: 1.6rem; font-weight: 800; margin: 0; }
+.lw-now .lw-sky { font-weight: 700; margin: 2px 0 8px; }
+.lw-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+.lw-facts dt { font-weight: 700; }
+.lw-facts dd { margin: 0; overflow-wrap: anywhere; }
+.lw-scroll-hint { font-size: 0.85rem; margin: 0 0 4px; }
+.lw-hours { list-style: none; margin: 0; padding: 0 0 8px; display: flex; gap: 8px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; }
+.lw-hours li { flex: 0 0 auto; min-width: 92px; max-width: 120px; scroll-snap-align: start; display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: #FAFAF9; font-size: 0.9rem; }
+.lw-hours li.lw-empty { max-width: none; }
+.lw-h-time { font-weight: 800; }
+.lw-h-temp { font-size: 1.1rem; font-weight: 800; }
+.lw-h-c, .lw-h-wind { color: var(--muted); }
+.lw-h-sky { overflow-wrap: anywhere; }
+.lw-days { list-style: none; margin: 0; padding: 0; }
+.lw-days li { border-bottom: 1px solid var(--line); padding: 8px 0; }
+.lw-d-name { font-weight: 800; }
+.lw-d-temps, .lw-d-sky { overflow-wrap: anywhere; }
+.lw-alerts .alert-list li .btn { margin-top: 6px; }
+.lw-updated { font-weight: 700; color: var(--ink); }
+.sheet-body .lw-hours, .sheet-body .lw-days { padding-left: 0; }

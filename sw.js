@@ -4,11 +4,19 @@
  *   bounded to MAX_TILES (oldest removed first). There is no prefetch: the OSM tile policy
  *   forbids it. The old 1.0.0 "Save this area" cache (ready-map-saved-v1) is deleted on activate.
  * - Everything else (Overpass, NOAA/NWS weather, RainViewer, map links) is NOT handled here:
- *   it goes straight to the network and is never cached.
+ *   it goes straight to the network and is never cached. That includes the 1.2.0 Ocean layer
+ *   hosts (nowcoast.noaa.gov, gis.charttools.noaa.gov, mapservices.weather.noaa.gov): ocean
+ *   model/satellite/chart pictures change and must never be shown stale from a cache.
+ *   The same goes for the 1.2.0 World layer hosts: www.gdacs.org (disaster alerts),
+ *   coastwatch.noaa.gov (world currents), wms.gebco.net (world sea depth) and RainViewer
+ *   (world radar), and the Weather news feeds (api.weather.gov, www.weather.gov, www.gdacs.org).
+ *   The Local weather card (api.weather.gov, api.open-meteo.com) is never cached here either:
+ *   its last result is kept only in page memory.
+ *   Only same-origin app files and TILE_HOST tiles are ever cached.
  */
 'use strict';
 
-var VERSION = '1.1.0';
+var VERSION = '1.2.0';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js
