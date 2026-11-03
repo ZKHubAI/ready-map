@@ -7,7 +7,7 @@
   <meta name="description" content="Ready Map: a simple map for anywhere in the world. It shows where you are, saves places, finds help nearby, and shows rain radar, clouds, disaster alerts and ocean layers.">
   <meta name="theme-color" content="#E86A17">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://photon.komoot.io https://nominatim.openstreetmap.org https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -49,6 +49,21 @@
   <main class="map-wrap">
     <div id="map" role="region" aria-label="Map. Tap the map to drop a pin."></div>
     <noscript><p class="noscript">Ready Map needs JavaScript turned on.</p></noscript>
+    <!-- Measure distance (1.4.0): not a modal, so the map stays tappable -->
+    <section id="measure-panel" class="measure-panel" aria-labelledby="measure-title" hidden>
+      <div class="measure-head">
+        <h2 id="measure-title" tabindex="-1">Measure distance</h2>
+        <button type="button" id="btn-measure-done" class="btn btn-primary">Done</button>
+      </div>
+      <p id="measure-status" class="measure-status" role="status" aria-live="polite"></p>
+      <ol id="measure-legs" class="measure-legs" hidden></ol>
+      <p id="measure-total" class="measure-total" aria-live="polite"></p>
+      <div class="measure-actions">
+        <button type="button" id="btn-measure-undo" class="btn">Undo last</button>
+        <button type="button" id="btn-measure-clear" class="btn">Clear</button>
+        <button type="button" id="btn-measure-me" class="btn" aria-label="Start from my location">From my location</button>
+      </div>
+    </section>
   </main>
 
   <section id="point-card" class="point-card" aria-labelledby="point-title" tabindex="-1">
@@ -82,6 +97,7 @@
       <ul class="tool-list">
         <li><button type="button" id="btn-places" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-places">My places <span class="tool-sub">Saved pins and GPX</span></button></li>
         <li><button type="button" id="btn-compass" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-compass">Compass <span class="tool-sub">Which way is north</span></button></li>
+        <li><button type="button" id="btn-measure" class="btn tool-btn" aria-pressed="false">Measure distance <span class="tool-sub">Tap points on the map</span></button></li>
         <li><button type="button" id="btn-save-area" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-save">Offline map <span class="tool-sub">Use the map without signal</span></button></li>
         <li><button type="button" id="btn-about" class="btn tool-btn" aria-haspopup="dialog" aria-controls="sheet-about">About and privacy <span class="tool-sub">Help, credits, links for bots</span></button></li>
       </ul>
@@ -109,6 +125,7 @@
         <a id="link-google-dir" class="btn" href="#" target="_blank" rel="noopener noreferrer">Google Maps</a>
         <a id="link-apple-dir" class="btn" href="#" target="_blank" rel="noopener noreferrer">Apple Maps</a>
       </div>
+      <button type="button" id="btn-point-spot" class="btn btn-wide" aria-haspopup="dialog" aria-controls="sheet-compass">Point to this spot (compass)</button>
 
       <h3>Save this place</h3>
       <form id="form-save-place" class="save-form" novalidate>
@@ -122,7 +139,7 @@
       <button type="button" id="btn-copy-link" class="btn">Copy link</button>
 
       <h3>Find nearby</h3>
-      <p class="hint">Pick what you need. We open Google or Apple Maps, or show it on this map.</p>
+      <p class="hint">Pick what you need. We list the closest ones on this map, with Google and Apple Maps directions.</p>
       <div class="btn-grid" id="nearby-buttons">
         <button type="button" class="btn" data-nearby="hospital">Hospital</button>
         <button type="button" class="btn" data-nearby="shelter">Shelter</button>
@@ -140,14 +157,23 @@
       <button type="button" class="sheet-close" data-close aria-label="Close nearby panel">Close</button>
     </div>
     <div class="sheet-body">
+      <p id="nearby-status" class="sheet-status" role="status" aria-live="polite"></p>
+      <ol id="nearby-list" class="result-list"></ol>
+      <div id="nearby-shelter-info" class="nearby-note" hidden>
+        <p><strong>Official disaster shelters</strong> are opened and announced by local authorities when they are needed, so they are often not on any map ahead of time.</p>
+        <div id="nearby-shelter-us" hidden>
+          <p><a class="btn btn-wide" id="link-redcross" href="https://www.redcross.org/get-help/disaster-relief-and-recovery-services/find-an-open-shelter.html" target="_blank" rel="noopener noreferrer">Red Cross: find an open shelter</a></p>
+          <p class="fine">FEMA: text <strong>SHELTER</strong> and your ZIP code to <strong>43362</strong> (for example: SHELTER 33130), or use the FEMA app. Dial 211 for local help. Follow local officials' instructions.</p>
+        </div>
+        <p id="nearby-shelter-world" class="fine" hidden>Check your local or national emergency agency, local radio, TV or news, and official alerts for open shelters. Follow local officials' instructions.</p>
+      </div>
+      <p class="hint">Or search with your maps app around this spot:</p>
       <div class="btn-row">
         <a id="link-google-search" class="btn" href="#" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>
         <a id="link-apple-search" class="btn" href="#" target="_blank" rel="noopener noreferrer">Open in Apple Maps</a>
       </div>
-      <button type="button" id="btn-nearby-show" class="btn btn-primary btn-wide">Show on this map</button>
-      <p id="nearby-status" class="sheet-status" role="status" aria-live="polite"></p>
-      <ol id="nearby-list" class="result-list"></ol>
-      <p class="fine">Map data from OpenStreetMap (Overpass API). It may be missing places. In an emergency, call 911.</p>
+      <button type="button" id="btn-nearby-show" class="btn btn-wide">Search again on this map</button>
+      <p class="fine">Map data © OpenStreetMap contributors, found with Overpass, with Photon (komoot) and Nominatim as backups. It may be missing places. In an emergency, call 911 (or your local emergency number).</p>
     </div>
   </section>
 
@@ -192,8 +218,20 @@
           <polygon points="50,6 64,54 50,46 36,54" fill="#9F1239"/>
           <polygon points="50,94 36,54 50,46 64,54" fill="#44403C"/>
         </svg>
+        <div id="compass-target-arrow" class="compass-target-arrow" hidden>
+          <svg viewBox="0 0 100 100" width="100%" height="100%" focusable="false">
+            <polygon points="50,1 61,19 54,19 54,33 46,33 46,19 39,19" fill="#1D4ED8" stroke="#fff" stroke-width="1.5"/>
+          </svg>
+        </div>
       </div>
+      <p id="compass-legend" class="fine" hidden><span class="legend-red">Red tip</span> = north. <span class="legend-blue">Blue arrow</span> = the spot (straight ahead when it is at the top).</p>
       <p id="compass-reading" class="compass-reading" aria-live="polite">Waiting for compass…</p>
+      <div id="compass-target" class="compass-target" hidden>
+        <p id="compass-target-name" class="compass-target-name"></p>
+        <p id="compass-target-info" class="compass-target-info" aria-live="polite"></p>
+        <p id="compass-target-turn" class="compass-target-turn" aria-live="polite"></p>
+        <p class="fine">Straight-line distance and direction ("as the crow flies"), not a walking route; check the map for roads, water and other obstacles. The compass uses magnetic north and the direction to the spot uses true north, so it can be off by a few degrees. If the arrow seems wrong, move the phone in a figure 8 to calibrate.</p>
+      </div>
       <p class="hint">Hold your phone flat. Keep it away from metal and magnets. The arrow points north.</p>
       <button type="button" id="btn-compass-stop" class="btn btn-wide">Stop compass</button>
     </div>
@@ -630,14 +668,14 @@
         <li>No tracking. No ads. No analytics. No cookies.</li>
         <li>Your GPS location and your saved places are stored only on this device. There is no Ready Map server, so nothing is sent to us.</li>
         <li>Two features send a spot to an outside service, and only when you use them:
-          "Show on this map" (nearby places) sends that spot's coordinates to the Overpass API, and
+          Find nearby (Hospital, Shelter, Police, Fire station, Gas) sends that spot's coordinates to the Overpass API (OpenStreetMap), and if it is slow, to Photon (photon.komoot.io) and Nominatim (nominatim.openstreetmap.org), and
           "Weather warnings" sends your location (or the map center) to the National Weather Service.
           "Weather news" sends the map center to the National Weather Service (api.weather.gov) to find your local weather office.
           "Local weather" sends one spot (your GPS spot, or the spot you tapped, or the map center) to the National Weather Service (api.weather.gov) in the U.S., or to Open-Meteo (api.open-meteo.com) outside the U.S.</li>
         <li>The app only talks to these services:
           <ul>
             <li>OpenStreetMap, for map pictures (tiles).</li>
-            <li>Overpass API, only when you tap "Show on this map" for nearby places.</li>
+            <li>Overpass API, and as backups Photon (komoot) and Nominatim (OpenStreetMap), only when you tap a Find nearby button. Results are kept on this device for 24 hours.</li>
             <li>NOAA / National Weather Service, only when you turn on a weather layer.</li>
             <li>NOAA ocean services, only when you turn on an Ocean layer: NOAA nowCOAST (nowcoast.noaa.gov) for currents and sea temperature, NOAA Office of Coast Survey charts (gis.charttools.noaa.gov) for depth lines, and the National Weather Service map server (mapservices.weather.noaa.gov) for marine zones. They see the map area you are looking at.</li>
             <li>RainViewer, for world radar outside the U.S. (or when you pick World radar), and if NOAA radar does not work.</li>
@@ -687,10 +725,11 @@
         <li>Weather stations: airport reports (METAR/ASOS/AWOS) via the <a href="https://mesonet.agron.iastate.edu/" target="_blank" rel="noopener noreferrer">Iowa Environmental Mesonet</a>, Iowa State University.</li>
         <li>Canada radar: <a href="https://eccc-msc.github.io/open-data/licence/readme_en/" target="_blank" rel="noopener noreferrer">Environment and Climate Change Canada</a> (MSC GeoMet), Open Government Licence - Canada.</li>
         <li>Germany radar: <a href="https://www.dwd.de/" target="_blank" rel="noopener noreferrer">Deutscher Wetterdienst</a> (RADOLAN RY), CC BY 4.0.</li>
+        <li>Find nearby: OpenStreetMap data via the Overpass API, <a href="https://photon.komoot.io/" target="_blank" rel="noopener noreferrer">Photon</a> by komoot and <a href="https://nominatim.org/" target="_blank" rel="noopener noreferrer">Nominatim</a> (backups).</li>
         <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.3.0</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.4.0</span>. In an emergency, call 911.</p>
     </div>
   </section>
 

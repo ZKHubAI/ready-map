@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.3.0.
+Version 1.4.0.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN, no tracking. Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -60,16 +60,50 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
 
+## Changes in 1.4.0
+
+- **Point to this spot** (This spot panel, and **Point here (compass)** on each Find nearby result):
+  opens the existing compass with a blue arrow that turns toward the spot as the phone turns, plus the
+  straight-line distance (mi/km, ft/m when close) and direction (degrees, N/NE…) from your GPS spot,
+  and "Turn left/right N°". Uses the same heading code as the compass (iOS `webkitCompassHeading`
+  after `DeviceOrientationEvent.requestPermission()` from the tap; Android `deviceorientationabsolute`).
+  Without a compass or permission it still shows distance and direction, and uses the GPS direction
+  of travel (`coords.heading` when moving faster than 1 m/s) for the arrow. GPS is only used on the
+  phone; nothing is sent anywhere.
+- **Measure distance** (More tools): while on, map taps add numbered points joined by a dashed line
+  (normal spot taps are paused); each leg and the total in mi/km (ft/m under 400 m), Undo last,
+  Clear, From my location (starts the line at your GPS position), and Done (clears and returns to normal taps).
+- Find nearby fix (below, first built as 1.3.1).
+
+## Changes in 1.3.1
+
+- Find nearby fixed: searches right away, races the Overpass mirrors with short timeouts, falls back
+  to Photon and Nominatim, never leaves a spinner (clear message plus Google/Apple Maps buttons).
+- Results list: number, name, distance and direction from the spot, address, map markers, and
+  Google and Apple directions per place. Shelter help box (Red Cross / FEMA for U.S. spots).
+
 ## Network use and privacy
 
 The app only contacts:
 
 - `tile.openstreetmap.org` for map tiles. Only tiles you actually view are loaded; the service
   worker keeps them (max 500, oldest dropped first) so they show offline.
-- An Overpass API mirror (`overpass-api.de`, then `overpass.kumi.systems`,
-  `overpass.private.coffee`, `maps.mail.ru`, with failover) only when you tap **Show on this map**
-  in Find nearby (sends that spot's coordinates; searches 1, then 3, then 6 miles; results are
-  kept in memory and in localStorage for 24 h; at most one request every 3 s).
+- Find nearby (since 1.3.1 it searches as soon as you tap Hospital, Shelter, Police, Fire station
+  or Gas in the This spot panel; it sends that spot's coordinates):
+  1. Overpass API (OpenStreetMap): staggered race over `overpass-api.de`, `overpass.kumi.systems`,
+     `overpass.private.coffee`, `maps.mail.ru` (last good mirror first; the next one starts if the
+     previous has not answered in 2 s; each try gives up after 7 s; first good answer wins, the rest
+     are cancelled). Searches 3 km, then 12 km if nothing was found.
+  2. Photon (`photon.komoot.io/reverse`, OpenStreetMap data, nearest places by tag) if Overpass has
+     not answered after 2.5 s, failed, or found nothing (10 km, then 40 km).
+  3. Nominatim (`nominatim.openstreetmap.org/search`, structured `amenity=` search in a box around the
+     spot, at most 1 request a second) if both found nothing or failed (8 km, then 30 km).
+  4. If every source fails (whole search capped at 20 s) it says so and shows Google Maps and Apple
+     Maps search buttons for that category centered on the spot.
+  Results are kept in memory and in localStorage for 24 h (shown without a new search for 6 h).
+  Shelter lists emergency shelters / social-facility shelters first, then community centers; it notes
+  that official shelters are announced by local authorities and, for U.S. spots, links the Red Cross
+  open-shelter map and FEMA's text-to-shelter number.
 - `nowcoast.noaa.gov` and `api.weather.gov` only while a weather layer is on (Weather warnings
   sends your GPS location, or the map center, to api.weather.gov).
 - `nowcoast.noaa.gov`, `gis.charttools.noaa.gov` and `mapservices.weather.noaa.gov` only while an
@@ -254,6 +288,7 @@ The top row always shows **Show my location**, **Follow me**, **Weather** and **
 `window.ReadyMap` has: `toDMS(lat, lon)`, `parseParams(search)`, `buildGpx(pins)`,
 `googleDirUrl`, `appleDirUrl`, `googleSearchUrl(word, lat, lon)`, `appleSearchUrl(word, lat, lon)`,
 `OVERPASS_MIRRORS` (array of mirror URLs), `overpassQuery(key, lat, lon, radiusM)` → Overpass QL string,
+`pointer.pointToSpot({lat, lon, name})`, `pointer.formatMeasure(m)`, `measure.{start, stop, add(lat, lon), total()}` (1.4.0), `nearby.findNearby(cat, point, signal, say)` and `nearby.sources.{overpass,photon,nominatim}(cat, point, signal)` (1.3.1),
 `tilesForBounds(bounds, zFrom, zTo)` → `{count, tiles, truncated}`, `buildSpotUrl`, `map`,
 `pickWmsTime(timesArray, nowMs)` → exact string from the array or `null`,
 `mercatorTileBbox(x, y, z)` → `[xmin, ymin, xmax, ymax]` in EPSG:3857 meters,

@@ -11,6 +11,7 @@
  *   1.3.0 hosts are never cached either: mesonet.agron.iastate.edu (station readings),
  *   geo.weather.gc.ca and maps.dwd.de (national radar) and api-bdc.io (country lookup).
  *   The station list (stations.json) is part of the app shell.
+ *   1.3.1 Find nearby backups photon.komoot.io and nominatim.openstreetmap.org are never cached here.
  *   The same goes for the 1.2.0 World layer hosts: www.gdacs.org (disaster alerts),
  *   coastwatch.noaa.gov (world currents), wms.gebco.net (world sea depth) and RainViewer
  *   (world radar), and the Weather news feeds (api.weather.gov, www.weather.gov, www.gdacs.org).
@@ -20,7 +21,7 @@
  */
 'use strict';
 
-var VERSION = '1.3.0';
+var VERSION = '1.4.0';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js

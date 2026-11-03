@@ -9,10 +9,10 @@
  *   7. Copy / share / emergency share
  *   8. Sheets (dialogs)
  *   9. Saved places + GPX
- *  10. Find nearby (links + Overpass)
+ *  10. Find nearby (Overpass race, Photon + Nominatim backups, map links)
  *  11. Offline save area
  *  12. Network status + service worker
- *  13. Compass
+ *  13. Compass (13b. Point to a spot, 13c. Measure distance: 1.4.0)
  *  14. Weather overlays (radar, satellite, warnings, world disaster alerts) + Ocean layers
  *      (currents, sea temperature, depth lines, marine zones, world currents, world sea depth)
  *  15. Startup
@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';
   // Base map tile provider. The OSM tile policy forbids bulk download / prefetch features
   // (https://operations.osmfoundation.org/policies/tiles/), so allowPrefetch is false: the app
   // only keeps tiles the user has actually looked at (the service worker caches them, max 500).
@@ -62,15 +62,24 @@
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
   ];
   var OVERPASS_MIRROR_KEY = 'readyMap.overpassMirror.v1';
-  var OVERPASS_TIMEOUT_MS = 12000;
-  // The last mirror left to try gets longer: there is nothing to fail over to, and a slow answer
-  // beats none (maps.mail.ru took ~17-22 s for a 2-5 km query in testing).
-  var OVERPASS_LAST_TIMEOUT_MS = 30000;
+  // 1.3.1: short tries, staggered race (see overpassFetch), then backup sources.
+  var OVERPASS_TRY_MS = 7000;
+  var OVERPASS_STAGGER_MS = 2000;
   var OVERPASS_SKIP_MS = 5 * 60 * 1000;
+  // Backup sources (free, no key, CORS open; both serve OpenStreetMap data).
+  var PHOTON_URL = 'https://photon.komoot.io/reverse';
+  var NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
+  var PHOTON_RADII_KM = [10, 40];
+  var NOMINATIM_RADII = [8000, 30000];
+  var NEARBY_SOURCE_MS = 6000;        // per backup request
+  var NEARBY_BACKUP_AFTER_MS = 2500;  // start the backup if Overpass has not answered by then
+  var NEARBY_GIVE_UP_MS = 20000;      // hard cap for the whole search
+  var NEARBY_FRESH_MS = 6 * 3600 * 1000; // saved results this new are shown without a new search
+  var NEARBY_MAX_ITEMS = 15;
   var NEARBY_STORE_KEY = 'readyMap.nearby.v1';
   var NEARBY_STORE_MAX = 30;
   var NEARBY_STORE_TTL = 24 * 3600 * 1000;
-  var NEARBY_RADII = [2000, 5000, 10000];
+  var NEARBY_RADII = [3000, 12000];
   var FETCH_TIMEOUT_MS = 15000;
 
   var reduceMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -895,6 +904,7 @@
 
     map.on('click', function (e) {
       var ll = e.latlng.wrap();
+      if (measure.on) { addMeasurePoint(ll.lat, ll.lng); return; } // 1.4.0 Measure distance
       dropPin(ll.lat, ll.lng, 'Dropped pin', 'pin');
     });
     map.on('dragstart', function () {
@@ -904,6 +914,7 @@
     map.getContainer().addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && e.target === map.getContainer()) {
         var c = map.getCenter().wrap();
+        if (measure.on) { addMeasurePoint(c.lat, c.lng); e.preventDefault(); return; }
         dropPin(c.lat, c.lng, 'Dropped pin', 'pin');
         e.preventDefault();
       }
@@ -1003,8 +1014,9 @@
   function onPosition(pos) {
     var first = !state.userFix || state.watchId === null;
     var c = pos.coords;
-    state.userFix = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, timestamp: pos.timestamp || Date.now() };
+    state.userFix = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, heading: c.heading, speed: c.speed, timestamp: pos.timestamp || Date.now() };
     drawUser();
+    if (pointer.target) renderPointer();
     var wasFirstFix = !layers._hadFix;
     layers._hadFix = true;
     // Weather chip: load on the first fix, then only after moving > 5 km or the 5-minute limit.
@@ -1553,23 +1565,29 @@
   function around(lat, lon, radiusM) {
     return '(around:' + Math.round(radiusM || 2000) + ',' + Number(lat).toFixed(5) + ',' + Number(lon).toFixed(5) + ')';
   }
+  // photon: OSM tags for the Photon backup; nominatim: amenity value for the Nominatim backup.
   var NEARBY = {
-    hospital: { label: 'Hospital', word: 'hospital', letter: 'H', color: '#9F1239',
+    hospital: { key: 'hospital', label: 'Hospital', plural: 'hospitals', word: 'hospital', letter: 'H', color: '#9F1239',
+      photon: ['amenity:hospital'], nominatim: 'hospital',
       q: function (a) { return 'nwr["amenity"="hospital"]' + a + ';'; } },
-    shelter: { label: 'Shelter', word: 'emergency shelter', letter: 'S', color: '#1D4ED8',
+    shelter: { key: 'shelter', label: 'Shelter', plural: 'shelters', word: 'emergency shelter', letter: 'S', color: '#1D4ED8',
+      photon: ['amenity:community_centre', 'amenity:social_facility'], nominatim: 'community_centre',
+      // 1.3.1: shelters and community centers in one request (shelters are listed first).
       q: function (a) {
         return 'nwr["social_facility"="shelter"]' + a + ';' +
           'nwr["emergency"="shelter"]' + a + ';' +
           'nwr["amenity"="shelter"]["emergency"="yes"]' + a + ';' +
-          'nwr["amenity"="shelter"]["emergency"="designated"]' + a + ';';
-      },
-      // Last try when no shelter is mapped within the widest radius.
-      fallback: 'community_centre' },
-    police: { label: 'Police', word: 'police station', letter: 'P', color: '#1E3A8A',
+          'nwr["amenity"="shelter"]["emergency"="designated"]' + a + ';' +
+          'nwr["amenity"="community_centre"]' + a + ';';
+      } },
+    police: { key: 'police', label: 'Police', plural: 'police stations', word: 'police station', letter: 'P', color: '#1E3A8A',
+      photon: ['amenity:police'], nominatim: 'police',
       q: function (a) { return 'nwr["amenity"="police"]' + a + ';'; } },
-    fire: { label: 'Fire station', word: 'fire station', letter: 'F', color: '#C2410C',
+    fire: { key: 'fire', label: 'Fire station', plural: 'fire stations', word: 'fire station', letter: 'F', color: '#C2410C',
+      photon: ['amenity:fire_station'], nominatim: 'fire_station',
       q: function (a) { return 'nwr["amenity"="fire_station"]' + a + ';'; } },
-    gas: { label: 'Gas', word: 'gas station', letter: 'G', color: '#3F6212',
+    gas: { key: 'gas', label: 'Gas', plural: 'gas stations', word: 'gas station', letter: 'G', color: '#3F6212',
+      photon: ['amenity:fuel'], nominatim: 'fuel',
       q: function (a) { return 'nwr["amenity"="fuel"]' + a + ';'; } }
   };
   var NEARBY_EXTRA = {
@@ -1581,79 +1599,292 @@
   function overpassQuery(key, lat, lon, radiusM) {
     var def = NEARBY[key] || NEARBY_EXTRA[key];
     if (!def) return '';
-    return '[out:json][timeout:15];(' + def.q(around(lat, lon, radiusM)) + ');out center 20;';
+    return '[out:json][timeout:15];(' + def.q(around(lat, lon, radiusM)) + ');out center 150;';
   }
 
   function radiusWords(m) {
-    if (m <= 2000) return '1 mile';
-    if (m <= 5000) return '3 miles';
-    return '6 miles';
+    var mi = m / 1609.344;
+    if (mi < 1.5) return '1 mile';
+    return Math.round(mi) + ' miles';
   }
 
-  // --- Overpass mirror failover ---------------------------------------------
+  // --- Overpass: staggered race across mirrors ---------------------------------
+  // 1.3.1: the mirrors are no longer tried one after another with long timeouts (that could take
+  // a minute when they were all busy). The last good mirror starts first; if it has not answered
+  // after OVERPASS_STAGGER_MS the next one starts too, and so on. The first good answer wins and
+  // the others are cancelled. Each try gives up after OVERPASS_TRY_MS.
   var mirrorFailedAt = {};
-  var lastOverpassAt = 0;
 
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage full or blocked */ } }
 
-  /** Mirrors in the order to try: last good first, recently failed ones skipped for 5 minutes. */
+  /** Mirrors in the order to try: last good first, recently failed ones last. */
   function mirrorOrder() {
     var good = lsGet(OVERPASS_MIRROR_KEY);
     var list = OVERPASS_MIRRORS.slice();
     if (good && list.indexOf(good) > 0) { list.splice(list.indexOf(good), 1); list.unshift(good); }
     var now = Date.now();
-    var fresh = list.filter(function (u) { return !(mirrorFailedAt[u] && now - mirrorFailedAt[u] < OVERPASS_SKIP_MS); });
-    return fresh.length ? fresh : list; // all failed recently: try them all again rather than give up
+    var bad = function (u) { return mirrorFailedAt[u] && now - mirrorFailedAt[u] < OVERPASS_SKIP_MS; };
+    return list.filter(function (u) { return !bad(u); }).concat(list.filter(bad));
   }
 
-  /** Be polite to the shared servers: at most one request every 3 seconds. */
-  function politeWait(signal) {
-    var wait = Math.max(0, 3000 - (Date.now() - lastOverpassAt));
+  /** Abort-aware sleep. */
+  function nearbySleep(ms, signal) {
     return new Promise(function (resolve, reject) {
-      var t = setTimeout(function () { lastOverpassAt = Date.now(); resolve(); }, wait);
+      if (signal && signal.aborted) { reject(new Error('aborted')); return; }
+      var t = setTimeout(resolve, ms);
       if (signal) signal.addEventListener('abort', function () { clearTimeout(t); reject(new Error('aborted')); }, { once: true });
     });
   }
 
-  /** POST a query, trying each mirror in turn. Resolves to the parsed JSON, rejects if all fail. */
-  function overpassFetch(query, signal, onRetry) {
+  /** POST a query to the mirrors (staggered race). Resolves to the parsed JSON, rejects if all fail. */
+  function overpassFetch(query, signal) {
     var order = mirrorOrder();
-    var i = 0;
-    function next() {
-      if (signal && signal.aborted) return Promise.reject(new Error('aborted'));
-      if (i >= order.length) return Promise.reject(new Error('all mirrors failed'));
-      var url = order[i];
-      if (i > 0 && onRetry) onRetry();
-      i++;
-      return politeWait(signal).then(function () {
-        return fetchWithTimeout(url, {
+    return new Promise(function (resolve, reject) {
+      var done = false, started = 0, pending = 0, ctrls = [], timers = [];
+      function finish(ok, val) {
+        if (done) return;
+        done = true;
+        timers.forEach(clearTimeout);
+        ctrls.forEach(function (c) { try { c.abort(); } catch (e) { /* ignore */ } });
+        if (ok) resolve(val); else reject(val);
+      }
+      function start() {
+        if (done || started >= order.length) return;
+        var url = order[started++];
+        var c = new AbortController();
+        ctrls.push(c);
+        pending++;
+        fetchWithTimeout(url, {
           method: 'POST',
           // Simple form POST: no CORS preflight.
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: 'data=' + encodeURIComponent(query),
           credentials: 'omit'
-        }, i < order.length ? OVERPASS_TIMEOUT_MS : OVERPASS_LAST_TIMEOUT_MS, signal);
-      }).then(function (res) {
-        if (!res.ok) throw new Error('HTTP ' + res.status); // 429, 5xx, anything not OK: next mirror
-        return res.text();
-      }).then(function (txt) {
-        var json = JSON.parse(txt); // invalid JSON (e.g. an HTML error page) also moves on
-        if (!json || !Array.isArray(json.elements)) throw new Error('bad reply');
-        if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark) && !json.elements.length) {
-          throw new Error('server busy');
-        }
-        delete mirrorFailedAt[url];
-        lsSet(OVERPASS_MIRROR_KEY, url);
-        return json;
-      }).catch(function (err) {
-        if (signal && signal.aborted) throw err;
-        mirrorFailedAt[url] = Date.now();
-        return next();
+        }, OVERPASS_TRY_MS, c.signal).then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status); // 429, 5xx, anything not OK
+          return res.text();
+        }).then(function (txt) {
+          var json = JSON.parse(txt); // invalid JSON (e.g. an HTML error page) counts as a failure
+          if (!json || !Array.isArray(json.elements)) throw new Error('bad reply');
+          if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark) && !json.elements.length) {
+            throw new Error('server busy');
+          }
+          delete mirrorFailedAt[url];
+          lsSet(OVERPASS_MIRROR_KEY, url);
+          finish(true, json);
+        }).catch(function () {
+          pending--;
+          if (done) return;
+          mirrorFailedAt[url] = Date.now();
+          if (started < order.length) start(); // a failure starts the next mirror right away
+          else if (!pending) finish(false, new Error('all Overpass mirrors failed'));
+        });
+        if (started < order.length) timers.push(setTimeout(start, OVERPASS_STAGGER_MS));
+      }
+      if (signal) {
+        if (signal.aborted) { finish(false, new Error('aborted')); return; }
+        signal.addEventListener('abort', function () { finish(false, new Error('aborted')); }, { once: true });
+      }
+      start();
+    });
+  }
+
+  // --- Result items -------------------------------------------------------------
+  function bearingDeg(lat1, lon1, lat2, lon2) {
+    var r = Math.PI / 180;
+    var y = Math.sin((lon2 - lon1) * r) * Math.cos(lat2 * r);
+    var x = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lon2 - lon1) * r);
+    return ((Math.atan2(y, x) / r) + 360) % 360;
+  }
+  /** 'northeast' etc. from the spot to a place ('' when it is right here). */
+  function directionWords(p, lat, lon) {
+    if (distanceMeters(p.lat, p.lon, lat, lon) < 30) return '';
+    return compassWords(cardinal(bearingDeg(p.lat, p.lon, lat, lon)));
+  }
+
+  /** Sort (closest first; for shelters, real shelters before community centers) and trim. */
+  function finishItems(items) {
+    var seen = {};
+    return items.filter(function (it) {
+      if (!it || !isFinite(it.lat) || !isFinite(it.lon)) return false;
+      var k = it.name + '|' + it.lat.toFixed(4) + ',' + it.lon.toFixed(4);
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    }).sort(function (a, b) { return (a.rank || 0) - (b.rank || 0) || a.dist - b.dist; }).slice(0, NEARBY_MAX_ITEMS);
+  }
+
+  function makeItem(cat, p, o) {
+    var named = !!o.name;
+    return {
+      name: String(o.name || o.note || ('Unnamed ' + cat.label.toLowerCase())).slice(0, 100),
+      note: named && o.note ? o.note : '',
+      rank: o.rank || 0,
+      addr: String(o.addr || '').slice(0, 120),
+      phone: String(o.phone || '').slice(0, 40),
+      lat: o.lat, lon: o.lon, dist: distanceMeters(p.lat, p.lon, o.lat, o.lon)
+    };
+  }
+
+  /** Shelter kind from OSM tags: rank 0 = shelter, 1 = community center, 2 = social facility. */
+  function shelterKind(tags) {
+    if (tags.social_facility === 'shelter' || tags.emergency === 'shelter' ||
+        (tags.amenity === 'shelter' && /^(yes|designated)$/.test(tags.emergency || ''))) {
+      return { rank: 0, note: 'Shelter' };
+    }
+    if (tags.amenity === 'community_centre') return { rank: 1, note: NEARBY_EXTRA.community_centre.note };
+    if (tags.amenity === 'social_facility') return { rank: 2, note: 'Social services (ask about shelter)' };
+    return { rank: 1, note: '' };
+  }
+
+  function parseNearbyItems(json, cat, p, note) {
+    return finishItems((json.elements || []).map(function (e) {
+      var lat = e.lat != null ? e.lat : e.center && e.center.lat;
+      var lon = e.lon != null ? e.lon : e.center && e.center.lon;
+      if (!isFinite(lat) || !isFinite(lon)) return null;
+      var tags = e.tags || {};
+      var kind = cat.key === 'shelter' ? shelterKind(tags) : { rank: 0, note: '' };
+      return makeItem(cat, p, {
+        name: tags.name || tags['name:en'] || tags.operator, note: note || kind.note, rank: kind.rank,
+        addr: [tags['addr:housenumber'], tags['addr:street'], tags['addr:city']].filter(Boolean).join(' '),
+        phone: tags.phone || tags['contact:phone'], lat: lat, lon: lon
+      });
+    }));
+  }
+
+  // --- Sources (each resolves { items, r, source } or rejects) ------------------------
+  /** 1. OpenStreetMap via Overpass: small radius first, wider only if nothing was found. */
+  function searchOverpass(cat, p, signal) {
+    var i = 0;
+    function step() {
+      var r = NEARBY_RADII[i];
+      return overpassFetch(overpassQuery(cat.key, p.lat, p.lon, r), signal).then(function (json) {
+        var items = parseNearbyItems(json, cat, p);
+        if (!items.length && i < NEARBY_RADII.length - 1) { i++; return step(); }
+        return { items: items, r: r, source: 'OpenStreetMap (Overpass)' };
       });
     }
-    return next();
+    return step();
   }
+
+  function photonAddr(pr) {
+    return [[pr.housenumber, pr.street].filter(Boolean).join(' '), pr.city || pr.district || pr.county].filter(Boolean).join(', ');
+  }
+  /** 2. OpenStreetMap via Photon (komoot) reverse search by tag: nearest places of that kind. */
+  function searchPhoton(cat, p, signal) {
+    var i = 0;
+    function step() {
+      var km = PHOTON_RADII_KM[i];
+      var url = PHOTON_URL + '?lat=' + p.lat.toFixed(4) + '&lon=' + wrapLon(p.lon).toFixed(4) +
+        '&radius=' + km + '&limit=' + NEARBY_MAX_ITEMS +
+        cat.photon.map(function (t) { return '&osm_tag=' + encodeURIComponent(t); }).join('');
+      return fetchWithTimeout(url, { credentials: 'omit' }, NEARBY_SOURCE_MS, signal).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (j) {
+        if (!j || !Array.isArray(j.features)) throw new Error('bad reply');
+        var items = finishItems(j.features.map(function (f) {
+          var c = f.geometry && f.geometry.coordinates;
+          if (!c) return null;
+          var pr = f.properties || {};
+          var kind = cat.key === 'shelter' ? shelterKind({ amenity: pr.osm_value }) : { rank: 0, note: '' };
+          return makeItem(cat, p, { name: pr.name, note: kind.note, rank: kind.rank, addr: photonAddr(pr), lat: Number(c[1]), lon: Number(c[0]) });
+        }));
+        if (!items.length && i < PHOTON_RADII_KM.length - 1) { i++; return step(); }
+        return { items: items, r: km * 1000, source: 'OpenStreetMap (Photon)' };
+      });
+    }
+    return step();
+  }
+
+  /** 3. OpenStreetMap via Nominatim, inside a box around the spot (at most 1 request a second). */
+  var lastNominatimAt = 0;
+  function searchNominatim(cat, p, signal) {
+    var i = 0;
+    function step() {
+      var r = NOMINATIM_RADII[i];
+      var dLat = r / 111320, dLon = r / (111320 * Math.max(0.05, Math.cos(p.lat * Math.PI / 180)));
+      var lon = wrapLon(p.lon);
+      var box = [lon - dLon, p.lat + dLat, lon + dLon, p.lat - dLat].map(function (n) { return n.toFixed(4); }).join(',');
+      var wait = Math.max(0, 1100 - (Date.now() - lastNominatimAt));
+      return nearbySleep(wait, signal).then(function () {
+        lastNominatimAt = Date.now();
+        var url = NOMINATIM_URL + '?format=jsonv2&addressdetails=1&limit=40&bounded=1&viewbox=' + box +
+          '&amenity=' + encodeURIComponent(cat.nominatim);
+        return fetchWithTimeout(url, { credentials: 'omit' }, NEARBY_SOURCE_MS, signal);
+      }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (j) {
+        if (!Array.isArray(j)) throw new Error('bad reply');
+        var items = finishItems(j.map(function (f) {
+          var a = f.address || {};
+          var kind = cat.key === 'shelter' ? shelterKind({ amenity: f.type }) : { rank: 0, note: '' };
+          return makeItem(cat, p, {
+            name: f.name, note: kind.note, rank: kind.rank,
+            addr: [[a.house_number, a.road].filter(Boolean).join(' '), a.city || a.town || a.village || a.suburb].filter(Boolean).join(', '),
+            lat: Number(f.lat), lon: Number(f.lon)
+          });
+        })).filter(function (it) { return it.dist <= r * 1.5; });
+        if (!items.length && i < NOMINATIM_RADII.length - 1) { i++; return step(); }
+        return { items: items, r: r, source: 'OpenStreetMap (Nominatim)' };
+      });
+    }
+    return step();
+  }
+
+  /**
+   * Run the sources: Overpass first; Photon starts when Overpass fails, finds nothing, or has not
+   * answered after NEARBY_BACKUP_AFTER_MS; Nominatim when both are done without results.
+   * The first source with results wins. Resolves { items, r, source } (items may be empty when
+   * every source answered but found nothing), rejects when every source failed.
+   * say(text) gets progress messages.
+   */
+  function findNearby(cat, p, signal, say) {
+    var sources = [
+      { name: 'overpass', fn: searchOverpass, msg: 'Searching OpenStreetMap…' },
+      { name: 'photon', fn: searchPhoton, msg: 'Map server is slow. Trying a backup source…' },
+      { name: 'nominatim', fn: searchNominatim, msg: 'Trying one more source…' }
+    ];
+    return new Promise(function (resolve, reject) {
+      var done = false, next = 0, running = 0, empties = [], timer = null;
+      function finish(ok, v) { if (done) return; done = true; clearTimeout(timer); if (ok) resolve(v); else reject(v); }
+      function launch() {
+        if (done || next >= sources.length) return;
+        var s = sources[next++];
+        running++;
+        say(s.msg);
+        if (next === 1) timer = setTimeout(launch, NEARBY_BACKUP_AFTER_MS);
+        s.fn(cat, p, signal).then(function (res) {
+          running--;
+          if (done) return;
+          res.via = s.name;
+          if (res.items.length) { finish(true, res); return; }
+          empties.push(res);
+          advance();
+        }, function () {
+          running--;
+          if (done) return;
+          advance();
+        });
+      }
+      function advance() {
+        if (done) return;
+        if (next === 1) { clearTimeout(timer); launch(); return; } // backup now, without waiting
+        if (running) return; // another source is still working
+        if (next < sources.length) { launch(); return; }
+        if (empties.length) {
+          finish(true, empties.sort(function (a, b) { return b.r - a.r; })[0]);
+          return;
+        }
+        finish(false, new Error('no source answered'));
+      }
+      if (signal) signal.addEventListener('abort', function () { finish(false, new Error('aborted')); }, { once: true });
+      launch();
+    });
+  }
+  ReadyMap.nearby = { findNearby: findNearby, sources: { overpass: searchOverpass, photon: searchPhoton, nominatim: searchNominatim }, NEARBY: NEARBY };
 
   // --- Saved results (localStorage) -------------------------------------------
   function loadNearbyStore() {
@@ -1677,43 +1908,47 @@
     return r;
   }
 
+  var US_CODES = ['US', 'PR', 'VI', 'GU', 'AS', 'MP'];
+  /** Shelter help box: official shelters are announced by local authorities. */
+  function showShelterInfo(key, p) {
+    var box = $('nearby-shelter-info');
+    if (!box) return;
+    box.hidden = key !== 'shelter';
+    if (key !== 'shelter') return;
+    var set = function (us) {
+      if (state.selected !== p || state.nearbyCategory !== 'shelter') return;
+      $('nearby-shelter-us').hidden = !us;
+      $('nearby-shelter-world').hidden = !!us;
+    };
+    var cc = Country.known(p.lat, p.lon);
+    if (cc !== undefined && cc !== null) { set(US_CODES.indexOf(cc) !== -1); return; }
+    set(inNoaaRadarCoverage(p.lat, p.lon)); // rough guess first, then the real country
+    Country.lookup(p.lat, p.lon).then(function (c) { if (c !== null) set(US_CODES.indexOf(c) !== -1); });
+  }
+
   function openNearby(key, opener) {
     var cat = NEARBY[key];
     var p = state.selected;
     if (!cat || !p) return;
+    if (state.nearbyFlight && state.nearbyFlight.key !== nearbyKey(key, p)) {
+      state.nearbyFlight.ctrl.abort(); // a different search: stop the old one
+    }
     state.nearbyCategory = key;
     $('nearby-title').textContent = cat.label + ' nearby';
     $('link-google-search').href = googleSearchUrl(cat.word, p.lat, p.lon);
     $('link-apple-search').href = appleSearchUrl(cat.word, p.lat, p.lon);
+    $('link-google-search').textContent = 'Search ' + cat.plural + ' in Google Maps';
+    $('link-apple-search').textContent = 'Search in Apple Maps';
     $('nearby-status').textContent = '';
+    $('nearby-status').classList.remove('is-error');
     clear($('nearby-list'));
-    var ck = nearbyKey(key, p);
-    var cached = state.nearbyCache.get(ck);
-    if (cached) renderNearby(cat, p, cached);
-    else if (!navigator.onLine) {
-      var saved = getSavedNearby(ck);
-      if (saved) renderNearby(cat, p, saved, true);
-    }
+    showShelterInfo(key, p);
     openSheet('sheet-nearby', opener);
+    // 1.3.1: search right away (one tap), instead of waiting for "Show on this map".
+    showNearbyOnMap();
   }
 
   function nearbyKey(key, p) { return key + ':' + p.lat.toFixed(3) + ',' + p.lon.toFixed(3); }
-
-  function parseNearbyItems(json, cat, p, note) {
-    return (json.elements || []).map(function (e) {
-      var lat = e.lat != null ? e.lat : e.center && e.center.lat;
-      var lon = e.lon != null ? e.lon : e.center && e.center.lon;
-      if (!isFinite(lat) || !isFinite(lon)) return null;
-      var tags = e.tags || {};
-      var addr = [tags['addr:housenumber'], tags['addr:street'], tags['addr:city']].filter(Boolean).join(' ');
-      return {
-        name: String(tags.name || tags.operator || note || ('Unnamed ' + cat.label.toLowerCase())).slice(0, 100),
-        note: note && (tags.name || tags.operator) ? note : '',
-        addr: addr.slice(0, 120), phone: String(tags.phone || tags['contact:phone'] || '').slice(0, 40),
-        lat: lat, lon: lon, dist: distanceMeters(p.lat, p.lon, lat, lon)
-      };
-    }).filter(Boolean).sort(function (a, b) { return a.dist - b.dist; });
-  }
 
   function showNearbyOnMap() {
     var key = state.nearbyCategory;
@@ -1723,93 +1958,103 @@
     var status = $('nearby-status');
     var ck = nearbyKey(key, p);
     if (state.nearbyCache.has(ck)) { renderNearby(cat, p, state.nearbyCache.get(ck)); return; }
-    if (state.nearbyFlight) { status.textContent = 'Still looking… please wait.'; return; }
+    if (state.nearbyFlight && state.nearbyFlight.key === ck) { status.textContent = 'Still looking… please wait.'; return; }
+    var saved = getSavedNearby(ck);
+    if (saved && (!navigator.onLine || Date.now() - saved.t < NEARBY_FRESH_MS)) { renderNearby(cat, p, saved, true); return; }
     if (!navigator.onLine) {
-      var saved = getSavedNearby(ck);
-      if (saved) { renderNearby(cat, p, saved, true); return; }
-      status.textContent = 'You are offline, so we cannot search the map. When you have signal, use the Google Maps or Apple Maps buttons above.';
+      renderNearbyFailed(cat, p, 'You are offline, so this map cannot search. When you have signal, use the Google Maps or Apple Maps buttons.');
       return;
     }
     var btn = $('btn-nearby-show');
     btn.disabled = true;
+    btn.textContent = 'Searching…';
+    status.classList.remove('is-error');
+    clear($('nearby-list'));
     var ctrl = new AbortController();
-    state.nearbyFlight = ctrl;
+    var flight = { key: ck, ctrl: ctrl };
+    state.nearbyFlight = flight;
     var current = function () { return state.nearbyCategory === key && state.selected === p; };
     var say = function (t) { if (current()) status.textContent = t; };
-    var onRetry = function () { say('Trying another map server…'); };
+    // Hard cap: never leave a spinner. After NEARBY_GIVE_UP_MS everything is cancelled.
+    var giveUp = setTimeout(function () { ctrl.abort(); }, NEARBY_GIVE_UP_MS);
 
-    // Widen step by step: 1 mile, 3 miles, 6 miles (each a new request with failover),
-    // then for shelters, community centers within 6 miles.
-    var steps = NEARBY_RADII.map(function (r) { return { key: key, r: r, note: '' }; });
-    if (cat.fallback) {
-      steps.push({ key: cat.fallback, r: NEARBY_RADII[NEARBY_RADII.length - 1], note: NEARBY_EXTRA[cat.fallback].note });
-    }
-    var idx = 0;
-    var searchedR = 0; // widest radius that was actually searched (with 0 results so far)
-    function run() {
-      var s = steps[idx];
-      say(s.note ? 'No shelters mapped within ' + radiusWords(s.r) + '. Looking for community centers…'
-        : 'Looking within ' + radiusWords(s.r) + '…');
-      return overpassFetch(overpassQuery(s.key, p.lat, p.lon, s.r), ctrl.signal, onRetry).then(function (json) {
-        var items = parseNearbyItems(json, cat, p, s.note);
-        if (!s.note) searchedR = s.r;
-        if (!items.length && idx < steps.length - 1) { idx++; return run(); }
-        return { t: Date.now(), r: s.r, items: items, fallback: !!s.note && items.length > 0 };
-      }, function (err) {
-        // A wider search failed after a narrower one worked: say what we know (not cached, so a retry can widen).
-        if (searchedR && !(ctrl.signal.aborted)) {
-          return { t: Date.now(), r: searchedR, items: [], partial: true };
-        }
-        throw err;
-      });
-    }
-    run().then(function (result) {
-      if (result.partial) { if (current()) renderNearby(cat, p, result); return; }
+    findNearby(cat, p, ctrl.signal, say).then(function (result) {
+      result.t = Date.now();
       state.nearbyCache.set(ck, result);
       if (state.nearbyCache.size > 30) state.nearbyCache.delete(state.nearbyCache.keys().next().value);
       saveNearbyResult(ck, result);
       if (current()) renderNearby(cat, p, result);
     }).catch(function () {
       if (!current()) return;
-      var saved = getSavedNearby(ck);
-      if (saved) { renderNearby(cat, p, saved, true); return; }
-      status.textContent = 'Could not load places on this map right now (the map servers did not answer). Please use the Google Maps or Apple Maps buttons above.';
+      var old = getSavedNearby(ck);
+      if (old) { renderNearby(cat, p, old, true); return; }
+      renderNearbyFailed(cat, p, 'The free map servers did not answer in time, so this map cannot list ' + cat.plural +
+        ' right now. These buttons open a search for ' + cat.plural + ' around this spot:');
     }).finally(function () {
-      state.nearbyFlight = null;
+      clearTimeout(giveUp);
+      if (state.nearbyFlight === flight) state.nearbyFlight = null;
       btn.disabled = false;
+      btn.textContent = 'Search again on this map';
     });
   }
 
-  /** result = { t, r (radius m), items, fallback }. fromSaved: shown from localStorage. */
+  /** Clear message plus big working map-search buttons (used when nothing could be listed). */
+  function mapSearchButtons(cat, p) {
+    return el('li', { className: 'nearby-fallback' }, [
+      el('div', { className: 'btn-row' }, [
+        el('a', { className: 'btn btn-primary', href: googleSearchUrl(cat.word, p.lat, p.lon), target: '_blank', rel: 'noopener noreferrer',
+          text: 'Google Maps: ' + cat.plural }),
+        el('a', { className: 'btn btn-primary', href: appleSearchUrl(cat.word, p.lat, p.lon), target: '_blank', rel: 'noopener noreferrer',
+          text: 'Apple Maps: ' + cat.plural })
+      ])
+    ]);
+  }
+  function renderNearbyFailed(cat, p, msg) {
+    var status = $('nearby-status');
+    status.textContent = msg + ' In an emergency, call 911 (or your local emergency number).';
+    status.classList.add('is-error');
+    var list = $('nearby-list');
+    clear(list);
+    list.appendChild(mapSearchButtons(cat, p));
+  }
+
+  /** result = { t, r (radius m), items, source }. fromSaved: shown from localStorage. */
   function renderNearby(cat, p, result, fromSaved) {
     var items = result.items || [];
     var list = $('nearby-list');
     var status = $('nearby-status');
     clear(list);
+    status.classList.remove('is-error');
     layers.nearby.clearLayers();
     var savedNote = fromSaved ? ' Saved from ' + new Date(result.t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) +
       ' (' + timeAgo(result.t) + ').' : '';
     var within = radiusWords(result.r || NEARBY_RADII[NEARBY_RADII.length - 1]);
+    var farthest = items.reduce(function (m, it) { return Math.max(m, it.dist); }, 0);
+    var src = result.source ? ' Source: ' + result.source + '.' : '';
     if (!items.length) {
-      status.textContent = 'No ' + cat.label.toLowerCase() + ' places found within ' + within +
-        ' on OpenStreetMap.' + (result.partial ? ' Could not search wider right now (the map servers did not answer); tap Show on this map to try again.' : '') +
-        ' Try the Google Maps or Apple Maps buttons.' + savedNote;
+      status.textContent = 'No ' + cat.plural + ' found within ' + within + ' on OpenStreetMap (it may be missing places).' +
+        ' Try Google Maps or Apple Maps:' + savedNote;
+      list.appendChild(mapSearchButtons(cat, p));
       return;
     }
-    status.textContent = (result.fallback
+    var shelters = items.filter(function (it) { return !it.rank; }).length;
+    var head = cat.key === 'shelter' && !shelters
       ? 'No shelters mapped nearby. Found ' + items.length + ' community center' + (items.length === 1 ? '' : 's') +
-        ' within ' + within + ' (may open as a shelter; check local news).'
-      : 'Found ' + items.length + ' within ' + within + '.') + ' Closest first. They are now on the map.' + savedNote;
+        ' or social service' + (items.length === 1 ? '' : 's') + ' (may open as a shelter; check local news).'
+      : 'Found ' + items.length + ' within ' + formatDistance(farthest) + '.';
+    status.textContent = head + ' Closest first. They are now on the map.' + src + savedNote;
     var group = [];
-    items.forEach(function (it) {
+    items.forEach(function (it, n) {
       var icon = L.divIcon({
         className: 'nearby-icon',
         html: '<span aria-hidden="true">' + cat.letter + '</span>',
         iconSize: [30, 30], iconAnchor: [15, 15]
       });
       var marker = L.marker([it.lat, it.lon], { icon: icon, title: it.name, alt: cat.label + ': ' + it.name, keyboard: true });
-      marker.on('add', function () { var n = marker.getElement(); if (n) n.style.background = cat.color; });
-      marker.bindTooltip(textNode(it.name + ' (' + formatDistance(it.dist) + ')'), { direction: 'top', offset: [0, -14] });
+      marker.on('add', function () { var node = marker.getElement(); if (node) node.style.background = cat.color; });
+      var dir = directionWords(p, it.lat, it.lon);
+      var where = formatDistance(it.dist) + (dir ? ' ' + dir : '') + ' of this spot';
+      marker.bindTooltip(textNode((n + 1) + '. ' + it.name + ' (' + formatDistance(it.dist) + ')'), { direction: 'top', offset: [0, -14] });
       marker.on('click', function (e) {
         L.DomEvent.stopPropagation(e);
         marker.openTooltip();
@@ -1817,18 +2062,26 @@
       layers.nearby.addLayer(marker);
       group.push([it.lat, it.lon]);
       var li = el('li', null, [
-        el('div', { className: 'result-name', text: it.name }),
+        el('div', { className: 'result-name', text: (n + 1) + '. ' + it.name }),
         it.note ? el('div', { className: 'result-meta', text: it.note }) : null,
-        el('div', { className: 'result-meta', text: formatDistance(it.dist) + ' away' + (it.addr ? ' · ' + it.addr : '') }),
+        el('div', { className: 'result-meta', text: where + (it.addr ? ' · ' + it.addr : '') }),
         it.phone ? el('a', { href: 'tel:' + it.phone.replace(/[^0-9+]/g, ''), text: 'Call ' + it.phone, className: 'btn' }) : null,
-        el('div', { className: 'btn-row' }, [
+        el('div', { className: 'nearby-actions' }, [
           el('button', {
             type: 'button', className: 'btn', text: 'Show on map', 'aria-label': 'Show ' + it.name + ' on map',
             on: { click: function () { closeSheet('sheet-nearby', true); moveTo(it.lat, it.lon, Math.max(state.map.getZoom(), 16)); marker.openTooltip(); } }
           }),
+          el('button', {
+            type: 'button', className: 'btn', text: 'Point here (compass)', 'aria-label': 'Point to ' + it.name + ' with the compass',
+            on: { click: function (e) { pointToSpot({ lat: it.lat, lon: it.lon, name: it.name }, e.currentTarget); } }
+          }),
           el('a', {
             className: 'btn', href: googleDirUrl(it.lat, it.lon), target: '_blank', rel: 'noopener noreferrer',
-            text: 'Directions', 'aria-label': 'Directions to ' + it.name + ' in Google Maps'
+            text: 'Google directions', 'aria-label': 'Directions to ' + it.name + ' in Google Maps'
+          }),
+          el('a', {
+            className: 'btn', href: appleDirUrl(it.lat, it.lon), target: '_blank', rel: 'noopener noreferrer',
+            text: 'Apple directions', 'aria-label': 'Directions to ' + it.name + ' in Apple Maps'
           })
         ])
       ]);
@@ -1927,6 +2180,7 @@
     $('compass-reading').textContent = cardinal(rounded) + ' ' + rounded + '°';
     // Arrow points to north: rotate opposite to the heading.
     $('compass-arrow').style.transform = 'rotate(' + (-h) + 'deg)';
+    if (pointer.target) renderPointer();
   }
 
   function screenAngle() {
@@ -1948,8 +2202,19 @@
     if (!compassRaf) compassRaf = requestAnimationFrame(renderHeading);
   }
 
-  function startCompass(opener) {
+  function startCompass(opener, keepTarget) {
+    if (!keepTarget && pointer.target) stopPointer();
+    // 1.4.0 Point to a spot: without a compass (or permission), still open the view for distance,
+    // direction in degrees and the GPS direction of travel.
+    var noSensor = function (msg) {
+      stopCompass();
+      $('compass-reading').textContent = 'No compass';
+      openSheet('sheet-compass', opener);
+      setStatus(msg, 'error');
+      renderPointer();
+    };
     if (!('DeviceOrientationEvent' in window)) {
+      if (keepTarget) { noSensor('A compass is not available on this device or browser. Distance and direction are still shown.'); return; }
       setStatus('A compass is not available on this device or browser.', 'error');
       return;
     }
@@ -1977,9 +2242,11 @@
       // iOS 13+: must be called directly from the tap.
       DOE.requestPermission().then(function (result) {
         if (result === 'granted') begin();
+        else if (keepTarget) noSensor('Compass permission was not given, so the arrow cannot turn with your phone. Distance and direction are still shown.');
         else setStatus('Compass permission was not given. To use it, allow Motion & Orientation access in Safari settings.', 'error');
       }).catch(function () {
-        setStatus('Could not turn on the compass. Please try again.', 'error');
+        if (keepTarget) noSensor('Could not turn on the compass. Distance and direction are still shown.');
+        else setStatus('Could not turn on the compass. Please try again.', 'error');
       });
     } else {
       begin();
@@ -1995,6 +2262,190 @@
     c.eventName = null;
     $('btn-compass').setAttribute('aria-pressed', 'false');
   }
+
+  // ---------------------------------------------------------------------------
+  // 13b. Point to a spot (1.4.0): a blue arrow in the compass view points from your GPS spot to
+  // a chosen spot as the phone turns. Uses the same heading as the compass (state.compass.heading);
+  // without a compass it falls back to the GPS direction of travel when you are moving.
+  // ---------------------------------------------------------------------------
+  var pointer = { target: null, watchId: null, fix: null, gpsMsg: '' };
+
+  function formatMeasure(m) {
+    if (m < 400) return Math.round(m * 3.28084).toLocaleString('en-US') + ' ft (' + Math.round(m) + ' m)';
+    var mi = m / 1609.344, km = m / 1000;
+    return (mi < 10 ? mi.toFixed(2) : mi.toFixed(1)) + ' mi (' + (km < 10 ? km.toFixed(2) : km.toFixed(1)) + ' km)';
+  }
+
+  /** Freshest GPS fix: the app's own (Show my location) or the pointer's own watch. */
+  function pointerFix() {
+    var a = state.userFix, b = pointer.fix;
+    if (a && b) return (a.timestamp || 0) >= (b.timestamp || 0) ? a : b;
+    return a || b || null;
+  }
+
+  function pointToSpot(target, opener) {
+    if (!target || !isFinite(target.lat) || !isFinite(target.lon)) return;
+    pointer.target = { lat: Number(target.lat), lon: Number(target.lon), name: String(target.name || 'This spot').slice(0, 100) };
+    pointer.gpsMsg = '';
+    startPointerGps();
+    startCompass(opener, true); // must run inside the tap (iOS permission prompt)
+    renderPointer();
+  }
+
+  function startPointerGps() {
+    if (pointer.watchId !== null || state.watchId !== null) return; // the app's GPS is already on
+    if (!('geolocation' in navigator)) { pointer.gpsMsg = 'This browser cannot get your GPS location.'; return; }
+    try {
+      pointer.watchId = navigator.geolocation.watchPosition(function (pos) {
+        var c = pos.coords;
+        pointer.fix = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, heading: c.heading, speed: c.speed, timestamp: pos.timestamp || Date.now() };
+        pointer.gpsMsg = '';
+        renderPointer();
+      }, function (err) {
+        pointer.gpsMsg = err && err.code === 1
+          ? 'Location permission is off, so the distance from you cannot be shown. Allow location for this site in your browser settings.'
+          : 'Could not get your GPS location yet. Go outside or near a window and wait a moment.';
+        renderPointer();
+      }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+    } catch (e) { pointer.gpsMsg = 'Could not start GPS.'; }
+  }
+
+  function stopPointer() {
+    if (pointer.watchId !== null) { try { navigator.geolocation.clearWatch(pointer.watchId); } catch (e) { /* ignore */ } }
+    pointer.watchId = null;
+    pointer.target = null;
+    renderPointer();
+  }
+
+  function renderPointer() {
+    var box = $('compass-target'), arrow = $('compass-target-arrow');
+    if (!box || !arrow) return;
+    var t = pointer.target;
+    if (!t) { box.hidden = true; arrow.hidden = true; $('compass-legend').hidden = true; return; }
+    box.hidden = false;
+    $('compass-legend').hidden = false;
+    $('compass-target-name').textContent = 'To: ' + t.name;
+    var info = $('compass-target-info'), turn = $('compass-target-turn');
+    var f = pointerFix();
+    if (!f) {
+      info.textContent = pointer.gpsMsg || 'Getting your GPS location…';
+      turn.textContent = '';
+      arrow.hidden = true;
+      return;
+    }
+    var d = distanceMeters(f.lat, f.lon, t.lat, t.lon);
+    var b = bearingDeg(f.lat, f.lon, t.lat, t.lon);
+    var br = Math.round(b) % 360;
+    var acc = f.accuracy ? ' GPS accuracy about ' + formatAccuracy(f.accuracy) + '.' : '';
+    if (d < Math.max(15, Math.min(f.accuracy || 0, 50))) {
+      info.textContent = 'You are at this spot (within GPS accuracy).' + acc;
+      turn.textContent = '';
+      arrow.hidden = true;
+      return;
+    }
+    info.textContent = formatMeasure(d) + ' away in a straight line, toward ' + cardinal(br) + ' ' + br + '° (' + compassWords(cardinal(br)) + ').' + acc;
+    var h = null, viaGps = false;
+    if (state.compass.on && state.compass.gotAbsolute && state.compass.heading != null) h = state.compass.heading;
+    else if (f.speed != null && f.speed > 1 && f.heading != null && isFinite(f.heading)) { h = f.heading; viaGps = true; }
+    if (h == null) {
+      arrow.hidden = true;
+      turn.textContent = 'No compass heading. Face ' + compassWords(cardinal(br)) + ' (' + br + '°), or start walking so GPS can tell your direction.';
+      return;
+    }
+    var rel = ((b - h) % 360 + 540) % 360 - 180; // -180..180, + = to your right
+    arrow.hidden = false;
+    arrow.style.transform = 'rotate(' + rel + 'deg)';
+    var a = Math.round(Math.abs(rel));
+    turn.textContent = (a <= 10 ? 'Straight ahead.' : a >= 170 ? 'Behind you. Turn around.' : 'Turn ' + (rel > 0 ? 'right' : 'left') + ' about ' + a + '°.') +
+      (viaGps ? ' (Using your GPS direction of travel: no compass.)' : '');
+  }
+  ReadyMap.pointer = { pointToSpot: pointToSpot, state: pointer, render: renderPointer, formatMeasure: formatMeasure, bearingDeg: function (a, b, c, d) { return bearingDeg(a, b, c, d); } };
+
+  // ---------------------------------------------------------------------------
+  // 13c. Measure distance (1.4.0): while on, map taps add numbered points joined by a line.
+  // ---------------------------------------------------------------------------
+  var measure = { on: false, pts: [], layer: null };
+
+  function startMeasure() {
+    closeSheet('sheet-tools', true);
+    sheetStack.slice().reverse().forEach(function (s) { closeSheet(s.id, true); });
+    measure.on = true;
+    if (!measure.layer) measure.layer = L.layerGroup().addTo(state.map);
+    $('measure-panel').hidden = false;
+    state.map.getContainer().classList.add('is-measuring');
+    document.body.classList.add('is-measuring');   // hides the spot card so the map gets more room
+    setTimeout(function () { state.map.invalidateSize(); }, 0);
+    $('btn-measure').setAttribute('aria-pressed', 'true');
+    renderMeasure();
+    $('measure-title').focus();
+  }
+  function stopMeasure() {
+    measure.on = false;
+    measure.pts = [];
+    if (measure.layer) measure.layer.clearLayers();
+    $('measure-panel').hidden = true;
+    state.map.getContainer().classList.remove('is-measuring');
+    document.body.classList.remove('is-measuring');
+    setTimeout(function () { state.map.invalidateSize(); }, 0);
+    $('btn-measure').setAttribute('aria-pressed', 'false');
+    $('btn-measure').focus();
+  }
+  function addMeasurePoint(lat, lon, isMe) {
+    var pt = { lat: lat, lon: wrapLon(lon), me: !!isMe };
+    if (isMe) {
+      if (measure.pts.length && measure.pts[0].me) measure.pts[0] = pt; else measure.pts.unshift(pt);
+    } else measure.pts.push(pt);
+    renderMeasure();
+  }
+  function measureFromMe() {
+    var f = pointerFix();
+    var use = function (fx) { addMeasurePoint(fx.lat, fx.lon, true); };
+    if (f && Date.now() - (f.timestamp || 0) < 120000) { use(f); return; }
+    if (!('geolocation' in navigator)) { $('measure-status').textContent = 'This browser cannot get your GPS location.'; return; }
+    $('measure-status').textContent = 'Getting your GPS location…';
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      var c = pos.coords;
+      pointer.fix = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, heading: c.heading, speed: c.speed, timestamp: pos.timestamp || Date.now() };
+      if (measure.on) use(pointer.fix);
+    }, function (err) {
+      $('measure-status').textContent = err && err.code === 1 ? 'Location permission is off. Allow location for this site to start from your location.' : 'Could not get your GPS location. Try again.';
+    }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+  }
+  function measureTotal() {
+    var t = 0;
+    for (var i = 1; i < measure.pts.length; i++) t += distanceMeters(measure.pts[i - 1].lat, measure.pts[i - 1].lon, measure.pts[i].lat, measure.pts[i].lon);
+    return t;
+  }
+  function renderMeasure() {
+    var pts = measure.pts;
+    if (measure.layer) {
+      measure.layer.clearLayers();
+      if (pts.length > 1) {
+        measure.layer.addLayer(L.polyline(pts.map(function (p) { return [p.lat, p.lon]; }), { color: '#1D4ED8', weight: 4, dashArray: '8 6', interactive: false }));
+      }
+      pts.forEach(function (p, i) {
+        measure.layer.addLayer(L.marker([p.lat, p.lon], {
+          icon: L.divIcon({ className: 'measure-icon', html: '<span>' + (p.me ? 'Me' : (i + 1)) + '</span>', iconSize: [28, 28], iconAnchor: [14, 14] }),
+          interactive: false, keyboard: false
+        }));
+      });
+    }
+    var list = $('measure-legs');
+    clear(list);
+    for (var i = 1; i < pts.length; i++) {
+      var d = distanceMeters(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+      var from = pts[i - 1].me ? 'Me' : String(i), to = String(i + 1);
+      list.appendChild(el('li', { text: from + ' → ' + to + ': ' + formatMeasure(d) }));
+    }
+    list.hidden = pts.length < 2;
+    $('measure-total').textContent = pts.length < 2 ? '' : 'Total: ' + formatMeasure(measureTotal());
+    $('measure-status').textContent = !pts.length ? 'Tap the map to add the first point.' :
+      pts.length === 1 ? 'Tap the map to add the next point.' : pts.length + ' points. Tap to add more.';
+    $('btn-measure-undo').disabled = !pts.length;
+    $('btn-measure-clear').disabled = !pts.length;
+    if (list.lastChild) list.scrollTop = list.scrollHeight;
+  }
+  ReadyMap.measure = { state: measure, add: addMeasurePoint, total: measureTotal, start: function () { startMeasure(); }, stop: function () { stopMeasure(); } };
 
   // ---------------------------------------------------------------------------
   // 13z. Country lookup + sharper forecast models (1.3.0)
@@ -5250,7 +5701,18 @@
 
     $('btn-compass').addEventListener('click', function (e) { startCompass(e.currentTarget); });
     $('btn-compass-stop').addEventListener('click', function () { closeSheet('sheet-compass'); });
-    sheetCloseHooks['sheet-compass'] = stopCompass;
+    sheetCloseHooks['sheet-compass'] = function () { stopCompass(); stopPointer(); };
+    // 1.4.0: Point to this spot, Measure distance
+    $('btn-point-spot').addEventListener('click', function (e) {
+      var p = state.selected;
+      if (!p) return;
+      pointToSpot({ lat: p.lat, lon: p.lon, name: p.label || 'This spot' }, e.currentTarget);
+    });
+    $('btn-measure').addEventListener('click', startMeasure);
+    $('btn-measure-undo').addEventListener('click', function () { measure.pts.pop(); renderMeasure(); });
+    $('btn-measure-clear').addEventListener('click', function () { measure.pts = []; renderMeasure(); });
+    $('btn-measure-me').addEventListener('click', measureFromMe);
+    $('btn-measure-done').addEventListener('click', stopMeasure);
 
     $('btn-weather').addEventListener('click', function (e) {
       if ($('sheet-weather').hidden) openSheet('sheet-weather', e.currentTarget); else closeSheet('sheet-weather');

@@ -517,3 +517,44 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .stn-pop .stn-name { font-weight: 700; margin: 0 0 4px; }
 .stn-pop .lw-facts { margin: 0 0 4px; }
 .stn-pop .fine { margin: 0; }
+
+/* 1.3.1 Find nearby */
+.sheet-status.is-error { color: #9F1239; font-weight: 700; }
+.nearby-fallback .btn-row .btn { flex: 1 1 45%; }
+.nearby-note { border: 1px solid var(--line, #CBD5E1); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+.nearby-note p { margin: 4px 0; }
+.nearby-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+.nearby-actions .btn { min-height: 44px; padding: 6px 4px; font-size: 0.85rem; line-height: 1.15; margin: 0; text-align: center; white-space: normal; }
+
+/* 1.4.0 Point to a spot */
+.compass-target-arrow { position: absolute; inset: 0; transition: transform 200ms linear; pointer-events: none; }
+.compass-target { text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+.compass-target p { margin: 4px 0; }
+.compass-target-name { font-weight: 800; overflow-wrap: anywhere; }
+.compass-target-info { font-weight: 700; }
+.compass-target-turn { font-size: 1.2rem; font-weight: 800; color: #1D4ED8; }
+.legend-red { color: #9F1239; font-weight: 800; }
+.legend-blue { color: #1D4ED8; font-weight: 800; }
+
+/* 1.4.0 Measure distance */
+.measure-panel {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 1100;
+  background: #fff; border: 2px solid #1D4ED8; border-radius: 12px; padding: 8px 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25); max-height: 55%; overflow: hidden; display: flex; flex-direction: column;
+}
+.measure-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.measure-head h2 { font-size: 1.05rem; margin: 0; }
+.measure-head .btn { min-width: 88px; }
+.measure-status { margin: 4px 0; font-size: 0.92rem; color: var(--muted); }
+.measure-legs { flex: 0 1 auto; min-height: 2.8em; margin: 2px 0; padding-left: 0; list-style: none; overflow-y: auto; max-height: 7.5em; font-size: 0.92rem; font-variant-numeric: tabular-nums; }
+.measure-legs li { padding: 1px 0; }
+.measure-total { font-weight: 900; font-size: 1.15rem; margin: 4px 0; font-variant-numeric: tabular-nums; }
+.measure-total:empty { display: none; }
+.measure-actions { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 6px; flex-shrink: 0; }
+.measure-actions .btn { min-height: 44px; margin: 0; padding: 6px; font-size: 0.9rem; }
+body.is-measuring .point-card { display: none; }
+.measure-head .btn { min-height: 44px; padding: 4px 12px; }
+.measure-status, .measure-total { margin: 2px 0; }
+.measure-icon { background: #1D4ED8; color: #fff; border: 2px solid #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.8rem; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+.leaflet-container.is-measuring { cursor: crosshair; }
+.measure-panel[hidden], .compass-target-arrow[hidden], .compass-target[hidden] { display: none; }
