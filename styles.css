@@ -79,6 +79,41 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
   white-space: nowrap;
 }
 .net-online { background: var(--ok); color: var(--on-ok); }
+
+/* Weather chip (1.2.1): always-visible current temp in the header, next to the Online badge.
+   Lives in the header (not over the map), so it never covers map controls. Sky text shrinks
+   with an ellipsis on narrow phones; the temperature always shows. */
+.header-right { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+.brand { flex: 0 0 auto; }
+.wx-chip {
+  min-width: 0; max-width: 100%; min-height: 40px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 2px solid #A8A29E; background: var(--card); color: var(--ink);
+  font: inherit; font-weight: 700; font-size: 0.9rem; line-height: 1.1;
+  text-align: left; overflow: hidden; cursor: pointer;
+}
+.wx-chip[hidden], .wx-chip [hidden] { display: none; }
+.wx-chip-temp { flex: 0 0 auto; font-size: 1.05rem; white-space: nowrap; }
+.wx-chip-sep { flex: 0 0 auto; }
+.wx-chip-text { min-width: 0; display: flex; flex-direction: column; }
+.wx-chip-sky {
+  min-width: 0; font-weight: 600;
+  overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
+.wx-chip-mark { font-weight: 600; font-style: italic; font-size: 0.75rem; white-space: nowrap; }
+.wx-chip.wx-chip-saved { border-style: dashed; color: #57534E; }
+.wx-chip.wx-chip-saved .wx-chip-sky { -webkit-line-clamp: 1; line-clamp: 1; }
+@media (max-width: 400px) {
+  .app-header { gap: 8px; }
+  .brand { gap: 6px; }
+  .app-header { padding-left: calc(10px + var(--safe-left)); padding-right: calc(10px + var(--safe-right)); }
+  .brand-name { font-size: 1.05rem; white-space: nowrap; }
+  .header-right { gap: 6px; }
+  .net-badge { padding: 6px 9px; font-size: 0.85rem; }
+  .wx-chip { padding: 2px 8px; gap: 4px; }
+  .wx-chip-sky { font-size: 0.78rem; line-height: 1.05; }
+}
 .net-offline { background: var(--danger); color: var(--on-danger); }
 
 /* ---------- Tool row ----------
@@ -184,6 +219,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .coords-accuracy { font-size: 0.9rem; color: var(--muted); }
 .point-actions { display: flex; gap: 8px; margin-top: 8px; }
 .point-actions .btn { flex: 1 1 0; }
+.point-wx { font-size: 0.95rem; font-weight: 700; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spotwx { display: grid; gap: 6px; justify-items: start; }
+.spotwx .lw-facts { width: 100%; }
+.spotwx-facts dt.spotwx-marine, .spotwx-facts dd.spotwx-marine { color: #0B4F6C; }
 
 /* ---------- Buttons ---------- */
 .btn {
@@ -412,7 +451,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 @media (min-width: 720px) {
   .sheet { right: 16px; left: auto; width: 420px; border-radius: 16px; bottom: calc(var(--footer-h, 72px) + 12px); }
   .point-card { display: grid; grid-template-columns: 1fr auto; column-gap: 16px; }
-  .point-actions { grid-column: 2; grid-row: 1 / span 4; align-self: center; margin: 0; }
+  .point-actions { grid-column: 2; grid-row: 1 / span 5; align-self: center; margin: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

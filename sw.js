@@ -7,6 +7,7 @@
  *   it goes straight to the network and is never cached. That includes the 1.2.0 Ocean layer
  *   hosts (nowcoast.noaa.gov, gis.charttools.noaa.gov, mapservices.weather.noaa.gov): ocean
  *   model/satellite/chart pictures change and must never be shown stale from a cache.
+ *   The 1.2.1 spot weather host marine-api.open-meteo.com is never cached either.
  *   The same goes for the 1.2.0 World layer hosts: www.gdacs.org (disaster alerts),
  *   coastwatch.noaa.gov (world currents), wms.gebco.net (world sea depth) and RainViewer
  *   (world radar), and the Weather news feeds (api.weather.gov, www.weather.gov, www.gdacs.org).
@@ -16,7 +17,7 @@
  */
 'use strict';
 
-var VERSION = '1.2.0';
+var VERSION = '1.2.1';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js

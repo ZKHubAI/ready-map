@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.2.0.
+Version 1.2.1.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN, no tracking. Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -87,6 +87,10 @@ The app only contacts:
 - **Local weather** (only when you open the card, then every 15 minutes while GPS is on): one spot
   (your GPS spot, else the spot you tapped, else the map center) goes to `api.weather.gov` in the
   U.S., or to `api.open-meteo.com` outside the U.S. Outside the U.S. it also reads the GDACS world list.
+- **Weather chip** (header, since 1.2.1): the same spot as Local weather, at startup, when the GPS
+  fix arrives, every 5 minutes and after it moves more than 5 km (same services and cache as Local weather).
+- **Spot weather** (since 1.2.1): when you select a spot, its coordinates go to `api.open-meteo.com`
+  and `marine-api.open-meteo.com` (at most once per spot every 5 minutes).
 - Google Maps / Apple Maps only when you tap their links.
 
 Weather, ocean and world data are never cached by the service worker (it only handles the app's
@@ -144,7 +148,7 @@ selected/tapped spot (`Map point`), else the map center. Sections: `#localwx-pla
 direction words and gusts, humidity, sky words), `#localwx-hourly` (24 `li.hour`, swipe sideways),
 `#localwx-daily` (7 `li.day`: day, high/low °F/°C, sky, rain chance), `#localwx-alerts`,
 `#localwx-source`, `#localwx-updated` ("Updated <local time>", plus "Saved from <time>" when showing an
-old result) and `#localwx-refresh`. No new toolbar chip.
+old result) and `#localwx-refresh`. The header weather chip (`#wx-chip`) also opens it.
 
 | Where | Source |
 | --- | --- |
@@ -152,7 +156,8 @@ old result) and `#localwx-refresh`. No new toolbar chip.
 | Outside the U.S. (points 404 or fails) | `https://api.open-meteo.com/v1/forecast?...&current=...&hourly=...&daily=...&forecast_days=7&forecast_hours=24&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph`. Warnings: points to World disaster alerts, and lists GDACS events within 300 km (reuses the layer's data if it is on, else one `EVENTS4APP` request kept 15 min) |
 
 Only `Accept` is sent (no custom headers; browsers do not allow setting User-Agent). Results are kept
-in memory only (never in the service worker or storage), keyed by the point rounded to 2 decimals;
+in memory only (never in the service worker or storage; the main-screen chip saves just its last
+temperature line, see below), keyed by the point rounded to 2 decimals;
 any result within 2 km is reused, and the same area is never fetched again within 5 minutes (Refresh
 says "Already up to date"). Auto-refresh every 15 minutes (or after moving more than 2 km) while GPS
 is on and the card was opened once; paused while the page is hidden. Offline: the last result with
@@ -160,6 +165,43 @@ is on and the card was opened once; paused while the page is hidden. Offline: th
 `ReadyMap.wmoCodeText` (WMO code → words), `ReadyMap.degToCompass` (degrees → 16-point, e.g. 225 → `SW`),
 `ReadyMap.compassWords` (`SW` → `southwest`). Open-Meteo: "Weather data by Open-Meteo.com", CC BY 4.0,
 free tier for non-commercial use (< 10,000 calls/day).
+
+## Weather chip on the main screen (`#wx-chip`, new in 1.2.1)
+
+A small button in the header, next to the Online badge, always shows the current temperature and
+short sky words, for example `48°F · Partly Cloudy`. It sits in the header, not over the map, so it
+never covers map controls; on narrow phones the sky words shrink with an ellipsis and the temperature
+always shows. Tapping it opens the Local weather card (`#sheet-localwx`). It has an `aria-label` with
+the full reading ("Weather now: 48°F, Partly Cloudy. Open local weather.").
+
+It uses the same point as the card (GPS fix, else the selected spot, else the map center) and the
+card's own fetch and cache, so the same 5-minute limit applies and a request already on its way is
+shared, never doubled. It loads at startup and when the GPS fix arrives, then refreshes every 5
+minutes and when the weather point moves more than 5 km (map moves, debounced). Offline (or if a
+fetch fails), it shows the last saved reading with a "· saved" mark and a dashed border; with nothing
+saved from the last 24 hours it hides. Only the last temperature, sky words, time and point are saved
+(`localStorage` key `readymap.wxchip.v1`). Test hook: `ReadyMap.wxChip` (`state`, `check(force)`,
+`shortSky(text)`).
+
+## Weather for the selected spot (This spot panel, new in 1.2.1)
+
+When a spot is selected (map tap, pin, shared link, saved place or GPS), the point card shows one
+line (`#point-wx`, e.g. `Weather: 80°F / 26°C · Clear sky · Sea 80°F`) and **More → This spot**
+starts with **Weather here** (`#spotwx`): air temperature °F/°C, sky words, wind (mph, direction,
+gusts), today's high and low, and for water spots sea surface temperature and waves (height in m and
+ft, period, direction they come from). **Full forecast** (`#btn-spotwx-full`) opens the Local weather
+card for that exact spot.
+
+| Data | Source |
+| --- | --- |
+| Air, sky, wind, high/low (worldwide, also over the ocean) | `https://api.open-meteo.com/v1/forecast?latitude=..&longitude=..&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph` |
+| Sea temperature, waves | `https://marine-api.open-meteo.com/v1/marine?latitude=..&longitude=..&current=sea_surface_temperature,wave_height,wave_direction,wave_period`. Water is detected by non-null values; on land every value is null and the marine rows are hidden |
+
+Results are cached in memory per spot (lat/lon rounded to 2 decimals) for 5 minutes; requests wait
+350 ms so quick re-selections do not each send one. Offline: a spot already fetched shows its weather
+marked "Saved"; a new spot says weather needs internet. If one API fails the other still shows.
+Test hook: `ReadyMap.spotWeather` (`state`, `update()`, `parseForecast`, `parseMarine`,
+`forecastUrl`, `marineUrl`, `waveLine`).
 
 ## Offline map (no area download)
 

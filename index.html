@@ -7,7 +7,7 @@
   <meta name="description" content="Ready Map: a simple map for anywhere in the world. It shows where you are, saves places, finds help nearby, and shows rain radar, clouds, disaster alerts and ocean layers.">
   <meta name="theme-color" content="#E86A17">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -28,7 +28,10 @@
       </svg>
       <h1 class="brand-name">Ready Map</h1>
     </div>
-    <p id="net-status" class="net-badge net-online" role="status">Online</p>
+    <div class="header-right">
+      <button type="button" id="wx-chip" class="wx-chip" aria-haspopup="dialog" aria-controls="sheet-localwx" aria-label="Weather now. Open local weather." hidden><span id="wx-chip-temp" class="wx-chip-temp"></span><span id="wx-chip-sep" class="wx-chip-sep" aria-hidden="true">·</span><span class="wx-chip-text"><span id="wx-chip-sky" class="wx-chip-sky"></span><span id="wx-chip-saved" class="wx-chip-mark" hidden>saved</span></span></button>
+      <p id="net-status" class="net-badge net-online" role="status">Online</p>
+    </div>
   </header>
 
   <nav class="chips" aria-label="Map tools">
@@ -53,6 +56,7 @@
     <p id="coords-decimal" class="coords coords-decimal">No point yet</p>
     <p id="coords-dms" class="coords coords-dms">Tap the map or tap Show my location.</p>
     <p id="coords-accuracy" class="coords-accuracy" hidden></p>
+    <p id="point-wx" class="point-wx" hidden></p>
     <div class="point-actions">
       <button type="button" id="btn-copy" class="btn">Copy</button>
       <button type="button" id="btn-share" class="btn">Share</button>
@@ -91,6 +95,14 @@
       <button type="button" class="sheet-close" data-close aria-label="Close this spot panel">Close</button>
     </div>
     <div class="sheet-body">
+      <h3>Weather here</h3>
+      <div id="spotwx" class="spotwx">
+        <p id="spotwx-status" class="hint" role="status" aria-live="polite" hidden></p>
+        <dl id="spotwx-facts" class="lw-facts spotwx-facts" hidden></dl>
+        <p id="spotwx-updated" class="fine"></p>
+        <button type="button" id="btn-spotwx-full" class="btn" aria-haspopup="dialog" aria-controls="sheet-localwx">Full forecast</button>
+      </div>
+
       <h3>Directions</h3>
       <div class="btn-row">
         <a id="link-google-dir" class="btn" href="#" target="_blank" rel="noopener noreferrer">Google Maps</a>
@@ -647,7 +659,7 @@
         <li>Local weather: NOAA / National Weather Service (api.weather.gov), public domain. Outside the U.S.: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather data by Open-Meteo.com</a>, CC BY 4.0 (free for non-commercial use).</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.2.0</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.2.1</span>. In an emergency, call 911.</p>
     </div>
   </section>
 

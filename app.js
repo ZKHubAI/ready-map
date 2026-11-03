@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.2.0';
+  var VERSION = '1.2.1';
   // Base map tile provider. The OSM tile policy forbids bulk download / prefetch features
   // (https://operations.osmfoundation.org/policies/tiles/), so allowPrefetch is false: the app
   // only keeps tiles the user has actually looked at (the service worker caches them, max 500).
@@ -917,6 +917,7 @@
   function select(point) {
     state.selected = point;
     renderPoint();
+    if (typeof SpotWx !== 'undefined' && SpotWx) { try { SpotWx.update(); } catch (e) { /* optional */ } }
   }
 
   function dropPin(lat, lon, label, source) {
@@ -1006,6 +1007,8 @@
     drawUser();
     var wasFirstFix = !layers._hadFix;
     layers._hadFix = true;
+    // Weather chip: load on the first fix, then only after moving > 5 km or the 5-minute limit.
+    if (typeof WxChip !== 'undefined' && WxChip) setTimeout(function () { try { WxChip.check(wasFirstFix); } catch (e) { /* optional */ } }, 0);
     $('btn-follow').disabled = false;
     if (wasFirstFix) {
       setFollow(true, true);
@@ -3669,12 +3672,18 @@
     var OBS_OLD_MS = 2 * 3600 * 1000;
     var GDACS_NEAR_M = 300000;
     var lw = { opened: false, cache: {}, attempts: {}, points: {}, last: null, gen: 0, ctrl: null, busy: false, timer: null,
-      gdacs: null, gdacsFlight: null };
+      gdacs: null, gdacsFlight: null, flight: null, listeners: [], forced: null };
 
     function keyOf(pt) { return pt.lat.toFixed(2) + ',' + pt.lon.toFixed(2); }
 
-    /** GPS fix first; with no fix, the tapped/selected spot; with neither, the map center. */
+    /** The card's point. "Full forecast" in This spot pins the card to that spot while it is open. */
     function pickPoint() {
+      if (lw.forced && !$('sheet-localwx').hidden) return lw.forced;
+      return basePoint();
+    }
+
+    /** GPS fix first; with no fix, the tapped/selected spot; with neither, the map center. */
+    function basePoint() {
       if (state.userFix) return { lat: state.userFix.lat, lon: state.userFix.lon, kind: 'Your location' };
       var s = state.selected;
       if (s && s.source !== 'user') return { lat: s.lat, lon: s.lon, kind: 'Map point' };
@@ -3928,6 +3937,7 @@
 
     // ----- rendering -----
     function status(text) { $('localwx-status').textContent = text || ''; }
+    function setStatusText(text) { status(text); }
 
     function renderPlace(r) {
       var where = r.place || formatDecimal(r.lat, r.lon);
@@ -4089,6 +4099,7 @@
         : 'Updated ' + t + '.';
     }
 
+    function renderAll(r, saved) { render(r, saved); }
     function render(r, saved) {
       renderPlace(r);
       renderNow(r);
@@ -4099,8 +4110,9 @@
       renderUpdated(r, saved);
     }
 
-    function showSavedOr(msg) {
-      var r = nearResult(pickPoint()) || lw.last;
+    function showSavedOrSheet(msg, pt) { showSavedOr(msg, pt); }
+    function showSavedOr(msg, pt) {
+      var r = nearResult(pt || pickPoint()) || lw.last;
       if (r) { render(r, true); status(msg + ' Showing weather saved from ' + formatLocalTime(new Date(r.fetchedAt)) + '.'); }
       else {
         status(msg);
@@ -4108,12 +4120,24 @@
       }
     }
 
-    /** Get weather for the current point. force = the user tapped Refresh. */
-    function load(force) {
-      var pt = pickPoint();
+    /** Get weather for the current point. force = the user tapped Refresh.
+     *  ptIn = a point from someone else (the header chip); the card is only redrawn when it is the card's point. */
+    function load(force, ptIn) {
+      var pt = ptIn || pickPoint();
+      var sheetPt = pickPoint();
+      var forSheet = !ptIn || distanceMeters(pt.lat, pt.lon, sheetPt.lat, sheetPt.lon) <= SAME_AREA_M;
+      var status = forSheet ? setStatusText : function () {};
+      var render = forSheet ? renderAll : function () {};
+      var showSavedOr = forSheet ? showSavedOrSheet : function () {};
       // Offline: anything shown is saved, never "current".
-      if (!navigator.onLine) { showSavedOr('Local weather needs internet. Try again when you have signal.'); return Promise.resolve(null); }
+      if (!navigator.onLine) { showSavedOr('Local weather needs internet. Try again when you have signal.', pt); return Promise.resolve(null); }
       var have = nearResult(pt);
+      // A request for this same area is already on its way (for example the main-screen chip): wait for it.
+      if (lw.flight && distanceMeters(lw.flight.lat, lw.flight.lon, pt.lat, pt.lon) <= SAME_AREA_M &&
+          !(have && Date.now() - have.fetchedAt < MIN_GAP_MS)) {
+        status('Getting the weather…');
+        return lw.flight.promise;
+      }
       if (have && Date.now() - have.fetchedAt < MIN_GAP_MS) {
         render(have, false);
         status(force ? 'Already up to date. New weather can be checked after ' +
@@ -4124,9 +4148,11 @@
       var tried = nearAttempt(pt);
       if (tried && Date.now() - tried.at < MIN_GAP_MS) {
         showSavedOr('Could not get the weather a moment ago. You can try again after ' +
-          formatLocalTime(new Date(tried.at + MIN_GAP_MS)) + '.');
+          formatLocalTime(new Date(tried.at + MIN_GAP_MS)) + '.', pt);
         return Promise.resolve(null);
       }
+      // Never cancel the card's own request just for the chip; the chip tries again later.
+      if (!forSheet && lw.busy) return Promise.resolve(null);
       var attemptKey = keyOf(pt);
       lw.attempts[attemptKey] = { lat: pt.lat, lon: pt.lon, at: Date.now() };
       var gen = ++lw.gen;
@@ -4134,33 +4160,51 @@
       var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
       lw.ctrl = ctrl;
       lw.busy = true;
-      $('localwx-refresh').disabled = true;
+      if (forSheet) $('localwx-refresh').disabled = true;
       status('Getting the weather…');
-      if (!have && !lw.last) $('localwx-place').textContent = pt.kind + ': ' + formatDecimal(pt.lat, pt.lon);
-      return fetchFor(pt, ctrl && ctrl.signal).then(function (r) {
+      if (forSheet && !have && !lw.last) $('localwx-place').textContent = pt.kind + ': ' + formatDecimal(pt.lat, pt.lon);
+      var promise = fetchFor(pt, ctrl && ctrl.signal).then(function (r) {
         if (gen !== lw.gen) return null;
         r.lat = pt.lat; r.lon = pt.lon; r.kind = pt.kind; r.center = !!pt.center; r.fetchedAt = Date.now();
         lw.cache[keyOf(pt)] = r;
         lw.last = r;
         render(r, false);
         status('');
+        notify(r);
         return r;
       }, function () {
         // A failure caused by losing signal does not count: try again as soon as we are back online.
         if (!navigator.onLine) delete lw.attempts[attemptKey];
         if (gen !== lw.gen) return null;
         showSavedOr(navigator.onLine ? 'Could not get the weather right now. Tap Refresh to try again.'
-          : 'Local weather needs internet. Try again when you have signal.');
+          : 'Local weather needs internet. Try again when you have signal.', pt);
         return null;
       }).finally(function () {
+        if (lw.flight && lw.flight.gen === gen) lw.flight = null;
         if (gen === lw.gen) { lw.busy = false; $('localwx-refresh').disabled = false; }
       });
+      lw.flight = { lat: pt.lat, lon: pt.lon, gen: gen, promise: promise };
+      return promise;
     }
 
-    function open() {
+    function notify(r) {
+      lw.listeners.forEach(function (fn) { try { fn(r); } catch (e) { /* a listener problem must not break the card */ } });
+    }
+    function onUpdate(fn) { lw.listeners.push(fn); }
+
+    /** spot (optional) = {lat, lon, label}: show the card for that spot (This spot -> Full forecast). */
+    function open(spot) {
       lw.opened = true;
-      // The card replaces the Weather sheet; focus returns to the Weather button.
-      openSheet('sheet-localwx', $('btn-weather'));
+      var opener = $('btn-weather');
+      if (spot && isFinite(spot.lat) && isFinite(spot.lon)) {
+        opener = $('btn-more');
+        openSheet('sheet-localwx', opener);
+        lw.forced = { lat: spot.lat, lon: spot.lon, kind: 'Map point' };
+      } else {
+        lw.forced = null;
+        // The card replaces the Weather sheet; focus returns to the Weather button.
+        openSheet('sheet-localwx', opener);
+      }
       var r = nearResult(pickPoint());
       if (r && navigator.onLine && Date.now() - r.fetchedAt < REFRESH_MS) { render(r, false); status(''); }
       else load(false);
@@ -4181,7 +4225,8 @@
     }
 
     function init() {
-      $('btn-localwx').addEventListener('click', open);
+      $('btn-localwx').addEventListener('click', function () { open(); });
+      sheetCloseHooks['sheet-localwx'] = function () { lw.forced = null; };
       $('localwx-refresh').addEventListener('click', function () { load(true); });
       document.addEventListener('visibilitychange', function () {
         if (document.hidden) { clearInterval(lw.timer); lw.timer = null; return; }
@@ -4191,9 +4236,318 @@
       window.addEventListener('online', function () { if (lw.opened && !$('sheet-localwx').hidden) load(false); });
     }
 
-    return { init: init, load: load, state: lw };
+    return { init: init, load: load, open: open, onUpdate: onUpdate, pickPoint: pickPoint, basePoint: basePoint, nearResult: nearResult,
+      MIN_GAP_MS: MIN_GAP_MS, state: lw };
   })();
   ReadyMap.localWeather = { state: LocalWx.state };
+
+  // ---------------------------------------------------------------------------
+  // 14b. Main-screen weather chip (1.2.1): current temp + short sky text in the header.
+  // Uses the Local weather card's point, fetch and cache (same 5-minute limit). Tap = open the card.
+  // ---------------------------------------------------------------------------
+  var WxChip = (function () {
+    var SAVE_KEY = 'readymap.wxchip.v1';
+    var MOVE_M = 5000;            // refetch when the weather point moves more than 5 km
+    var TICK_MS = 60 * 1000;
+    var SAVED_MAX_MS = 24 * 3600 * 1000;
+    var wc = { pt: null, at: 0, shown: null, timer: null, moveTimer: null };
+
+    function nowOf(r) {
+      var n = r && r.now;
+      if (n && n.tempF !== null && n.tempF !== undefined) return { tempF: n.tempF, sky: n.sky || '' };
+      var h = r && r.hourly && r.hourly[0];
+      if (h && h.tempF !== null && h.tempF !== undefined) return { tempF: h.tempF, sky: h.sky || '' };
+      return null;
+    }
+    /** Short sky text for a small chip: first part of the forecast phrase, max 22 characters. */
+    function shortSky(s) {
+      s = String(s || '').split(/\s+then\s+|;|,/i)[0].trim();
+      return s.length > 22 ? s.slice(0, 21).trim() + '…' : s;
+    }
+    function loadSaved() {
+      try {
+        var v = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+        if (v && isFinite(v.tempF) && isFinite(v.at) && Date.now() - v.at < SAVED_MAX_MS) return v;
+      } catch (e) { /* ignore */ }
+      return null;
+    }
+    function save(v) { try { localStorage.setItem(SAVE_KEY, JSON.stringify(v)); } catch (e) { /* storage blocked */ } }
+
+    function hide() { var b = $('wx-chip'); if (b) b.hidden = true; wc.shown = null; }
+
+    /** v = { tempF, sky, at, lat, lon }; saved = true when it is not a fresh reading. */
+    function show(v, saved) {
+      var b = $('wx-chip');
+      if (!b || !v) return;
+      var t = Math.round(v.tempF) + '°F';
+      var sky = shortSky(v.sky);
+      $('wx-chip-temp').textContent = t;
+      $('wx-chip-sep').hidden = !sky;
+      $('wx-chip-sky').textContent = sky;
+      $('wx-chip-saved').hidden = !saved;
+      var label = 'Weather now: ' + t + (v.sky ? ', ' + v.sky : '') +
+        (saved ? '. Saved from ' + formatLocalTime(new Date(v.at)) + ', not new' : '') + '. Open local weather.';
+      b.setAttribute('aria-label', label);
+      b.title = label;
+      b.classList.toggle('wx-chip-saved', !!saved);
+      b.hidden = false;
+      wc.shown = { v: v, saved: !!saved };
+    }
+
+    function fromResult(r, saved) {
+      var n = nowOf(r);
+      if (!n) return null;
+      return { tempF: n.tempF, sky: n.sky, at: r.fetchedAt, lat: r.lat, lon: r.lon };
+    }
+
+    function onResult(r) {
+      var v = fromResult(r);
+      if (!v) return;
+      // Ignore results for another spot (e.g. This spot -> Full forecast while GPS is on).
+      var bp = LocalWx.basePoint();
+      if (distanceMeters(r.lat, r.lon, bp.lat, bp.lon) > 2000) return;
+      wc.pt = { lat: r.lat, lon: r.lon };
+      wc.at = r.fetchedAt;
+      save(v);
+      show(v, false);
+    }
+
+    function showSaved() {
+      var last = LocalWx.state.last;
+      var v = (last && fromResult(last)) || loadSaved();
+      if (v) show(v, true); else hide();
+    }
+
+    /** Check whether the chip needs new weather; force = startup / GPS fix / back online. */
+    function check(force) {
+      if (!navigator.onLine) { showSaved(); return; }
+      if (document.hidden && !force) return;
+      var pt = LocalWx.basePoint();
+      var have = LocalWx.nearResult(pt);
+      if (have && Date.now() - have.fetchedAt < LocalWx.MIN_GAP_MS) { onResult(have); return; }
+      var moved = !wc.pt || distanceMeters(wc.pt.lat, wc.pt.lon, pt.lat, pt.lon) > MOVE_M;
+      var stale = Date.now() - wc.at >= LocalWx.MIN_GAP_MS;
+      if (!force && !moved && !stale) return;
+      LocalWx.load(false, pt).then(function (r) {
+        if (r) return;
+        if (!wc.shown || wc.shown.saved) showSaved();
+      }, function () { if (!wc.shown) showSaved(); });
+    }
+
+    function init() {
+      if (!$('wx-chip')) return;
+      LocalWx.onUpdate(onResult);
+      $('wx-chip').addEventListener('click', function () { LocalWx.open(); });
+      var saved = loadSaved();
+      if (saved) show(saved, true);
+      if (state.map) {
+        state.map.on('moveend', function () {
+          clearTimeout(wc.moveTimer);
+          wc.moveTimer = setTimeout(function () { check(false); }, 800);
+        });
+      }
+      window.addEventListener('online', function () { check(true); });
+      window.addEventListener('offline', showSaved);
+      document.addEventListener('visibilitychange', function () { if (!document.hidden) check(false); });
+      wc.timer = setInterval(function () { check(false); }, TICK_MS);
+      check(true);
+    }
+
+    return { init: init, check: check, state: wc, shortSky: shortSky };
+  })();
+  ReadyMap.wxChip = { state: WxChip.state, check: WxChip.check, shortSky: WxChip.shortSky };
+
+  // ---------------------------------------------------------------------------
+  // 14c. Weather for the selected spot (1.2.1): "This spot" panel + one line in the point card.
+  // Open-Meteo forecast (worldwide, also over the ocean) + Open-Meteo Marine (sea temperature and
+  // waves). Water is detected by the Marine API giving non-null values. Cached per spot (2 decimals)
+  // for 5 minutes, in memory only.
+  // ---------------------------------------------------------------------------
+  var SpotWx = (function () {
+    var FORECAST = 'https://api.open-meteo.com/v1/forecast';
+    var MARINE = 'https://marine-api.open-meteo.com/v1/marine';
+    var FRESH_MS = 5 * 60 * 1000;
+    var sw = { cache: {}, gen: 0, ctrl: null, key: null, timer: null };
+
+    function keyOf(lat, lon) { return lat.toFixed(2) + ',' + lon.toFixed(2); }
+    function num(v) { return v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v); }
+    function getJson(url, signal) {
+      return fetchWithTimeout(url, { credentials: 'omit' }, FETCH_TIMEOUT_MS, signal).then(function (res) {
+        if (!res.ok) { var e = new Error('HTTP ' + res.status); e.status = res.status; throw e; }
+        return res.json();
+      });
+    }
+
+    function forecastUrl(lat, lon) {
+      return FORECAST + '?latitude=' + lat.toFixed(4) + '&longitude=' + lon.toFixed(4) +
+        '&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m' +
+        '&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto' +
+        '&temperature_unit=fahrenheit&wind_speed_unit=mph';
+    }
+    function marineUrl(lat, lon) {
+      return MARINE + '?latitude=' + lat.toFixed(4) + '&longitude=' + lon.toFixed(4) +
+        '&current=sea_surface_temperature,wave_height,wave_direction,wave_period';
+    }
+    /** Pure parsers (exposed for tests). */
+    function parseForecast(j) {
+      var c = (j && j.current) || {};
+      var d = (j && j.daily) || {};
+      var first = function (a) { return Array.isArray(a) && a.length ? num(a[0]) : null; };
+      var out = {
+        tempF: num(c.temperature_2m),
+        sky: c.weather_code !== undefined && c.weather_code !== null ? wmoCodeText(c.weather_code) : '',
+        windMph: num(c.wind_speed_10m), windDeg: num(c.wind_direction_10m), gustMph: num(c.wind_gusts_10m),
+        hiF: first(d.temperature_2m_max), loF: first(d.temperature_2m_min)
+      };
+      if (out.tempF === null && out.hiF === null) throw new Error('empty forecast');
+      return out;
+    }
+    /** null = land (or no marine data): every value missing. */
+    function parseMarine(j) {
+      var c = (j && j.current) || {};
+      var out = { sstC: num(c.sea_surface_temperature), waveM: num(c.wave_height), waveDeg: num(c.wave_direction), waveS: num(c.wave_period) };
+      return out.sstC === null && out.waveM === null && out.waveS === null ? null : out;
+    }
+
+    // ----- text -----
+    function tBoth(f) { return f === null || f === undefined ? '—' : Math.round(f) + '°F / ' + Math.round(fToC(f)) + '°C'; }
+    function cBoth(c) { return c === null || c === undefined ? '—' : Math.round(cToF(c)) + '°F / ' + Math.round(c) + '°C'; }
+    function windLine(w) {
+      if (w.windMph === null) return '—';
+      var mph = Math.round(w.windMph);
+      if (mph === 0) return 'Calm';
+      var dir = degToCompass(w.windDeg);
+      var s = mph + ' mph' + (dir ? ' from the ' + compassWords(dir) + ' (' + dir + ')' : '');
+      if (w.gustMph !== null && Math.round(w.gustMph) > mph) s += ', gusts ' + Math.round(w.gustMph) + ' mph';
+      return s;
+    }
+    function hiLoLine(w) {
+      var parts = [];
+      if (w.hiF !== null) parts.push('High ' + tBoth(w.hiF));
+      if (w.loF !== null) parts.push('Low ' + tBoth(w.loF));
+      return parts.join(' · ') || '—';
+    }
+    function waveLine(m) {
+      if (m.waveM === null) return '—';
+      var s = (Math.round(m.waveM * 10) / 10) + ' m (' + (Math.round(m.waveM * 3.28084 * 10) / 10) + ' ft)';
+      if (m.waveS !== null) s += ', every ' + Math.round(m.waveS) + ' s';
+      var dir = degToCompass(m.waveDeg);
+      if (dir) s += ', from the ' + compassWords(dir) + ' (' + dir + ')';
+      return s;
+    }
+
+    // ----- render -----
+    function row(dl, name, value, cls) {
+      dl.appendChild(el('dt', { className: cls || '', text: name }));
+      dl.appendChild(el('dd', { className: cls || '', text: value }));
+    }
+    function setStatus(text) { $('spotwx-status').textContent = text || ''; $('spotwx-status').hidden = !text; }
+    function renderEntry(e, saved) {
+      var dl = $('spotwx-facts');
+      clear(dl);
+      var line = [];
+      if (e.wx) {
+        row(dl, 'Air', tBoth(e.wx.tempF));
+        row(dl, 'Sky', e.wx.sky || '—');
+        row(dl, 'Wind', windLine(e.wx));
+        row(dl, 'Today', hiLoLine(e.wx));
+        if (e.wx.tempF !== null) line.push(tBoth(e.wx.tempF));
+        if (e.wx.sky) line.push(e.wx.sky);
+      }
+      if (e.marine) {
+        row(dl, 'Sea temp', cBoth(e.marine.sstC), 'spotwx-marine');
+        row(dl, 'Waves', waveLine(e.marine), 'spotwx-marine');
+        if (e.marine.sstC !== null) line.push('Sea ' + Math.round(cToF(e.marine.sstC)) + '°F');
+      }
+      dl.hidden = !dl.firstChild;
+      var t = formatLocalTime(new Date(e.at));
+      $('spotwx-updated').textContent = e.wx || e.marine
+        ? (saved ? 'Saved from ' + t + ': this is the last weather we got here, not new.' : 'Updated ' + t + '.') +
+          ' Weather data by Open-Meteo.com (CC BY 4.0).'
+        : '';
+      var pw = $('point-wx');
+      pw.textContent = line.length ? (saved ? 'Saved: ' : 'Weather: ') + line.join(' · ') : '';
+      pw.hidden = !line.length;
+    }
+    function renderEmpty(msg) {
+      clear($('spotwx-facts'));
+      $('spotwx-facts').hidden = true;
+      $('spotwx-updated').textContent = '';
+      $('point-wx').hidden = true;
+      $('point-wx').textContent = '';
+      setStatus(msg);
+    }
+
+    function fetchSpot(lat, lon, signal) {
+      var settle = function (p) { return p.then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, e: e }; }); };
+      return Promise.all([
+        settle(getJson(forecastUrl(lat, lon), signal).then(parseForecast)),
+        settle(getJson(marineUrl(lat, lon), signal).then(parseMarine))
+      ]).then(function (r) {
+        if (!r[0].ok && !r[1].ok) throw r[0].e || new Error('failed');
+        return { wx: r[0].ok ? r[0].v : null, marine: r[1].ok ? r[1].v : null, wxFailed: !r[0].ok, marineFailed: !r[1].ok, at: Date.now(),
+          lat: lat, lon: lon };
+      });
+    }
+
+    /** Show weather for the selected spot (called whenever the selection changes). */
+    function update() {
+      var p = state.selected;
+      clearTimeout(sw.timer);
+      if (!p) { sw.key = null; renderEmpty(''); return; }
+      var key = keyOf(p.lat, p.lon);
+      var have = sw.cache[key];
+      if (key === sw.key && have && Date.now() - have.at < FRESH_MS && navigator.onLine) return; // same spot, fresh: nothing to do
+      sw.key = key;
+      // Offline: anything shown is saved, never "current".
+      if (!navigator.onLine) {
+        if (have) { renderEntry(have, true); setStatus('Weather needs internet. Showing what we saved earlier.'); }
+        else renderEmpty('Weather for this spot needs internet. Try again when you have signal.');
+        return;
+      }
+      if (have && Date.now() - have.at < FRESH_MS) { renderEntry(have, false); setStatus(have.wxFailed ? 'Could not get the air weather here right now.' : ''); return; }
+      if (have) renderEntry(have, true); else renderEmpty('');
+      setStatus('Getting the weather for this spot…');
+      // Short wait so dragging around or GPS updates do not send a request for every move.
+      sw.timer = setTimeout(function () { go(p.lat, p.lon, key); }, 350);
+    }
+
+    function go(lat, lon, key) {
+      var gen = ++sw.gen;
+      if (sw.ctrl) sw.ctrl.abort();
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      sw.ctrl = ctrl;
+      return fetchSpot(lat, lon, ctrl && ctrl.signal).then(function (e) {
+        sw.cache[key] = e;
+        if (gen !== sw.gen || sw.key !== key) return;
+        renderEntry(e, false);
+        setStatus(e.wxFailed ? 'Could not get the air weather here right now.' : '');
+      }, function () {
+        if (gen !== sw.gen || sw.key !== key) return;
+        var have = sw.cache[key];
+        var msg = navigator.onLine ? 'Could not get the weather for this spot right now. Try again in a few minutes.'
+          : 'Weather for this spot needs internet. Try again when you have signal.';
+        if (have) { renderEntry(have, true); setStatus(msg + ' Showing what we saved earlier.'); }
+        else renderEmpty(msg);
+      });
+    }
+
+    function init() {
+      if (!$('spotwx')) return;
+      $('btn-spotwx-full').addEventListener('click', function () {
+        var p = state.selected;
+        if (p) LocalWx.open({ lat: p.lat, lon: p.lon, label: p.label });
+      });
+      window.addEventListener('online', function () { sw.key = null; update(); });
+      window.addEventListener('offline', function () { sw.key = null; update(); });
+      update();
+    }
+
+    return { init: init, update: update, state: sw, parseForecast: parseForecast, parseMarine: parseMarine,
+      forecastUrl: forecastUrl, marineUrl: marineUrl, waveLine: waveLine };
+  })();
+  ReadyMap.spotWeather = { state: SpotWx.state, update: SpotWx.update, parseForecast: SpotWx.parseForecast,
+    parseMarine: SpotWx.parseMarine, forecastUrl: SpotWx.forecastUrl, marineUrl: SpotWx.marineUrl, waveLine: SpotWx.waveLine };
 
   // ---------------------------------------------------------------------------
   // 15. Startup
@@ -4276,6 +4630,8 @@
     Weather.init();
     try { News.init(); } catch (e) { /* news panel is optional */ }
     try { LocalWx.init(); } catch (e) { /* local weather card is optional */ }
+    try { WxChip.init(); } catch (e) { /* weather chip is optional */ }
+    try { SpotWx.init(); } catch (e) { /* spot weather is optional */ }
     updateLayoutVars();
     $('about-example').textContent = buildSpotUrl(40.7608, -111.891, 'Meeting spot', 15);
     registerServiceWorker();
