@@ -498,3 +498,22 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .lw-alerts .alert-list li .btn { margin-top: 6px; }
 .lw-updated { font-weight: 700; color: var(--ink); }
 .sheet-body .lw-hours, .sheet-body .lw-days { padding-left: 0; }
+
+/* 1.3.0: chip source mark, spot source + official service link, weather station dots */
+.wx-chip-marks { display: flex; gap: 4px; }
+.wx-chip-src { font-weight: 600; font-style: normal; opacity: 0.8; }
+.spotwx-facts dt.spotwx-src, .spotwx-facts dd.spotwx-src { font-size: 0.85rem; color: #44403C; }
+.spotwx-official { font-size: 0.9rem; margin: 0; }
+.stn-icon { background: transparent; border: 0; }
+.stn-icon span {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 22px; padding: 0 5px; box-sizing: border-box;
+  border-radius: 11px; border: 2px solid #fff; background: #1D4ED8; color: #fff;
+  font: 700 12px/1 system-ui, -apple-system, sans-serif; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+}
+.stn-icon.stn-old span { background: #78716C; }
+.stn-legend { display: inline-block; vertical-align: middle; margin-right: 4px; }
+.stn-pop .stn-name { font-weight: 700; margin: 0 0 4px; }
+.stn-pop .lw-facts { margin: 0 0 4px; }
+.stn-pop .fine { margin: 0; }

@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.2.1.
+Version 1.3.0.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN, no tracking. Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -91,6 +91,13 @@ The app only contacts:
   fix arrives, every 5 minutes and after it moves more than 5 km (same services and cache as Local weather).
 - **Spot weather** (since 1.2.1): when you select a spot, its coordinates go to `api.open-meteo.com`
   and `marine-api.open-meteo.com` (at most once per spot every 5 minutes).
+- **Country lookup** (since 1.3.0): the spot (3 decimals) goes to `api-bdc.io` (BigDataCloud free
+  client-side reverse geocoding) to pick the forecast model and the official weather service link,
+  and the map center goes there for national radar near a border. Cached in memory per 0.1° cell.
+- **Weather stations** (since 1.3.0, only when on and zoomed in to 7+): the IDs of the stations in
+  view go to `mesonet.agron.iastate.edu` (at most once every 20 s, each reading kept 10 min).
+- **National radar** (since 1.3.0, radar on, Automatic, zoom 6+ over Canada or Germany):
+  `geo.weather.gc.ca` (ECCC GeoMet) or `maps.dwd.de` (DWD GeoServer) see the map area.
 - Google Maps / Apple Maps only when you tap their links.
 
 Weather, ocean and world data are never cached by the service worker (it only handles the app's
@@ -107,7 +114,8 @@ World layers work everywhere.
 
 | Layer | Coverage | Source | Notes |
 | --- | --- | --- | --- |
-| Rain radar (`toggle-radar`) | World (U.S. detail from NOAA) | NOAA nowCOAST (`base_reflectivity_mosaic`); RainViewer world radar | "Which radar" radios `name="radar-area"`: `auto` (NOAA when the map center is in CONUS, Alaska, Hawaii, Puerto Rico/USVI or Guam, else RainViewer; re-picked on `moveend`, debounced), `us` (NOAA, falls back to RainViewer if NOAA fails), `world` (RainViewer, max native zoom 7). "Data from" names the source |
+| Weather stations (`toggle-stations`, 1.3.0) | World, zoom 7+ | Iowa Environmental Mesonet `api/1/currents.json?station=..` (METAR/ASOS/AWOS) + shipped `stations.json` (~5,200 stations: id, lat, lon) | dot = °F now (gray if older than 2 h); tap: name, temp °F/°C, wind mph/direction/gusts, visibility, observed time; up to 60 stations in view (grid-thinned, ICAO airports first), one request ≥ 20 s apart, readings cached 10 min; "Data from" = updated time, station count, newest reading. aviationweather.gov was not used: it sends no CORS header, so browsers block it |
+| Rain radar (`toggle-radar`) | World (U.S. detail from NOAA; Canada and Germany national radar) | NOAA nowCOAST (`base_reflectivity_mosaic`); RainViewer world radar | "Which radar" radios `name="radar-area"`: `auto` (NOAA when the map center is in CONUS, Alaska, Hawaii, Puerto Rico/USVI or Guam, else RainViewer; re-picked on `moveend`, debounced; since 1.3.0 at zoom 6+ over Canada it uses ECCC GeoMet `RADAR_1KM_RRAI` and over Germany DWD `dwd:RADOLAN-RY`, both with a time loop from their own GetCapabilities; near borders the country is looked up once; if their tiles fail it falls back to RainViewer), `us` (NOAA, falls back to RainViewer if NOAA fails), `world` (RainViewer, max native zoom 7). "Data from" names the source |
 | Clouds (`toggle-satellite`) | Americas (GOES) or World (GMGSI) | NOAA nowCOAST `goes_longwave_imagery` / `goes_visible_imagery`; NOAA/NESDIS GMGSI `global_longwave_imagery_mosaic` / `global_visible_imagery_mosaic` | `sat-kind` radios; exact listed time via `pickWmsTime` |
 | Weather warnings (`toggle-alerts`) | U.S. only | api.weather.gov alerts (includes marine warnings) | outside the U.S. it points to World disaster alerts |
 | World disaster alerts (`toggle-gdacs`) | World | GDACS `https://www.gdacs.org/gdacsapi/api/events/geteventlist/EVENTS4APP` | dots coloured by alert level with a letter (G/O/R); popup with type, severity, local dates, GDACS report link; `gdacs-list` = 10 nearest the map center with distance; freshness = newest `datemodified` (UTC) |
@@ -166,6 +174,14 @@ is on and the card was opened once; paused while the page is hidden. Offline: th
 `ReadyMap.compassWords` (`SW` → `southwest`). Open-Meteo: "Weather data by Open-Meteo.com", CC BY 4.0,
 free tier for non-commercial use (< 10,000 calls/day).
 
+Sharper models (1.3.0): Open-Meteo's `best_match` does not say which model it used, so outside the
+U.S. the card asks for the sharp national model by name (`&models=..._seamless`, picked by country,
+else by area; table `ReadyMap.models.list`): NOAA HRRR 3 km (`gfs_seamless`), Canada HRDPS 2.5 km
+(`gem_seamless`), UK Met Office UKV 2 km, DWD ICON-D2 2 km (`icon_seamless`), Météo-France AROME 1.3 km,
+MeteoSwiss ICON-CH1 1 km, KNMI and DMI HARMONIE 2 km, ItaliaMeteo ICON-2I 2 km, MET Norway Nordic 1 km,
+JMA MSM 5 km. Values the sharp model does not cover (later days) are filled from `best_match`;
+elsewhere it uses `best_match`. `#localwx-source` says "Model: …" (U.S.: "NWS forecast grid (2.5 km)").
+
 ## Weather chip on the main screen (`#wx-chip`, new in 1.2.1)
 
 A small button in the header, next to the Online badge, always shows the current temperature and
@@ -182,6 +198,9 @@ fetch fails), it shows the last saved reading with a "· saved" mark and a dashe
 saved from the last 24 hours it hides. Only the last temperature, sky words, time and point are saved
 (`localStorage` key `readymap.wxchip.v1`). Test hook: `ReadyMap.wxChip` (`state`, `check(force)`,
 `shortSky(text)`).
+
+Since 1.3.0 the chip also shows where its number comes from (`#wx-chip-src`: "station" for a
+National Weather Service station reading, "model" for a forecast model), also in its `aria-label`.
 
 ## Weather for the selected spot (This spot panel, new in 1.2.1)
 
@@ -201,7 +220,14 @@ Results are cached in memory per spot (lat/lon rounded to 2 decimals) for 5 minu
 350 ms so quick re-selections do not each send one. Offline: a spot already fetched shows its weather
 marked "Saved"; a new spot says weather needs internet. If one API fails the other still shows.
 Test hook: `ReadyMap.spotWeather` (`state`, `update()`, `parseForecast`, `parseMarine`,
-`forecastUrl`, `marineUrl`, `waveLine`).
+`forecastUrl`, `marineUrl`, `waveLine`, `chipMatch`).
+
+1.3.0: the forecast uses the same sharp-model choice as Local weather. If the spot is within 2 km
+of the header chip's spot (chip reading fresh, not saved), Air and Sky reuse the chip's reading so
+the two numbers match; the **Source** row says "Same as the top bar: weather station KSLC…" or
+"Forecast model: DWD ICON-D2 (2 km)". `#spotwx-official` links the official weather service for
+the spot's country (table `ReadyMap.wxServices`; each URL was checked to load on 2026-11-02; U.S.
+links go to the NWS point forecast). Over open sea there is no link.
 
 ## Offline map (no area download)
 

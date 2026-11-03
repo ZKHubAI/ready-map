@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.2.1';
+  var VERSION = '1.3.0';
   // Base map tile provider. The OSM tile policy forbids bulk download / prefetch features
   // (https://operations.osmfoundation.org/policies/tiles/), so allowPrefetch is false: the app
   // only keeps tiles the user has actually looked at (the service worker caches them, max 500).
@@ -1997,6 +1997,252 @@
   }
 
   // ---------------------------------------------------------------------------
+  // 13z. Country lookup + sharper forecast models (1.3.0)
+  // Country: which country a spot is in (for national radar, the forecast model and the official
+  // weather service link). BigDataCloud's free client-side reverse geocoder; cached in page memory
+  // per 0.1 degree cell. '' = no country (open sea), null = lookup failed.
+  // ---------------------------------------------------------------------------
+  var Country = (function () {
+    var API = 'https://api-bdc.io/data/reverse-geocode-client';
+    var OK_MS = 24 * 3600 * 1000, FAIL_MS = 10 * 60 * 1000, WAIT_MS = 5000;
+    var cache = new Map(), flights = new Map();
+    function key(lat, lon) { return Number(lat).toFixed(1) + ',' + wrapLon(lon).toFixed(1); }
+    /** Cached country code: 'CA', '' (sea), null (failed) or undefined (not looked up yet). */
+    function known(lat, lon) {
+      var c = cache.get(key(lat, lon));
+      if (!c) return undefined;
+      if (Date.now() - c.at > (c.cc === null ? FAIL_MS : OK_MS)) return undefined;
+      return c.cc;
+    }
+    function nameOf(lat, lon) { var c = cache.get(key(lat, lon)); return c && c.name ? c.name : ''; }
+    function lookup(lat, lon) {
+      var k = key(lat, lon);
+      var have = known(lat, lon);
+      if (have !== undefined) return Promise.resolve(have);
+      if (flights.has(k)) return flights.get(k);
+      if (!navigator.onLine) return Promise.resolve(null);
+      var url = API + '?latitude=' + Number(lat).toFixed(3) + '&longitude=' + wrapLon(lon).toFixed(3) + '&localityLanguage=en';
+      var p = fetchWithTimeout(url, { credentials: 'omit' }, WAIT_MS).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (j) {
+        var cc = j && typeof j.countryCode === 'string' && /^[A-Z]{2}$/.test(j.countryCode) ? j.countryCode : '';
+        var name = j && typeof j.countryName === 'string' ? j.countryName.slice(0, 80) : '';
+        cache.set(k, { cc: cc, name: name, at: Date.now() });
+        return cc;
+      }).catch(function () {
+        cache.set(k, { cc: null, name: '', at: Date.now() });
+        return null;
+      }).then(function (cc) { flights.delete(k); return cc; });
+      flights.set(k, p);
+      return p;
+    }
+    return { lookup: lookup, known: known, nameOf: nameOf, key: key, cache: cache };
+  })();
+  ReadyMap.country = Country;
+
+  /**
+   * Open-Meteo regional high-resolution models. "best_match" does not say which model it used, so
+   * for places with a sharp national model we ask for that model by name ("seamless" = the sharp
+   * model first, then the national/global one for later days) and say which one it is.
+   * cc: countries that get this model when the country is known; area: [south, west, north, east]
+   * where the model has data; core: boxes used when the country is not known (open sea, failed lookup).
+   * Checked with api.open-meteo.com on 2026-11-02.
+   */
+  var OM_MODELS = [
+    { id: 'ukmo_seamless', label: 'UK Met Office UKV (2 km)', cc: ['GB', 'IE', 'IM', 'JE', 'GG'],
+      area: [[49.5, -11, 61, 2.5]], core: [[49.8, -10.7, 61, 1.8]] },
+    { id: 'meteoswiss_icon_seamless', label: 'MeteoSwiss ICON-CH1 (1 km)', cc: ['CH', 'LI'],
+      area: [[45.6, 5.7, 48, 10.7]], core: [[45.8, 5.95, 47.8, 10.5]] },
+    { id: 'knmi_seamless', label: 'KNMI HARMONIE-AROME (2 km)', cc: ['NL'],
+      area: [[50.5, 3.2, 53.8, 7.4]], core: [[51.2, 3.4, 53.6, 7.1]] },
+    { id: 'dmi_seamless', label: 'DMI HARMONIE-AROME (2 km)', cc: ['DK'],
+      area: [[54.4, 7.8, 58, 15.4]], core: [[54.8, 8, 57.8, 15.2]] },
+    { id: 'meteofrance_seamless', label: 'Météo-France AROME (1.3 km)', cc: ['FR', 'BE', 'LU', 'MC', 'AD'],
+      area: [[41.3, -5.5, 51.5, 10]], core: [[42.3, -4.8, 51.1, 8.2]] },
+    { id: 'icon_seamless', label: 'DWD ICON-D2 (2 km)', cc: ['DE', 'AT', 'CZ', 'PL', 'SI', 'SK', 'HU'],
+      area: [[43.2, -3.9, 58, 20.3]], core: [[47.2, 5.8, 55.1, 15.1], [46.3, 9.5, 51.1, 17.2]] },
+    { id: 'italia_meteo_arpae_icon_2i', label: 'ItaliaMeteo ICON-2I (2 km)', cc: ['IT', 'SM', 'VA', 'MT'],
+      area: [[35.5, 6.5, 47.2, 18.7]], core: [[36.5, 7.5, 46.6, 18.5]] },
+    { id: 'metno_seamless', label: 'MET Norway Nordic (1 km)', cc: ['NO', 'SE', 'FI'],
+      area: [[54.5, 4, 71.5, 32]], core: [[55.3, 4.5, 71.2, 31.5]] },
+    { id: 'jma_seamless', label: 'JMA MSM (5 km)', cc: ['JP'],
+      area: [[22, 120, 48, 150]], core: [[24, 122.5, 46, 146.5]] },
+    { id: 'gem_seamless', label: 'Canada HRDPS (2.5 km)', cc: ['CA'],
+      area: [[41.6, -141.1, 72, -52]], core: [[49.1, -141, 72, -52]] },
+    { id: 'gfs_seamless', label: 'NOAA HRRR (3 km)', cc: ['US'],
+      area: [[21.1, -134.1, 52.6, -60.9]], core: [[24, -125, 49.3, -66.9]] }
+  ];
+  var OM_BEST = { id: 'best_match', label: 'Open-Meteo best match (global models)' };
+
+  function inBoxes(boxes, lat, lon) {
+    lon = wrapLon(lon);
+    return (boxes || []).some(function (b) { return lat >= b[0] && lat <= b[2] && lon >= b[1] && lon <= b[3]; });
+  }
+  /** Which Open-Meteo model to ask for at a spot. cc: country code if known ('' / null / undefined if not). */
+  function omModelFor(lat, lon, cc) {
+    var i;
+    if (cc) {
+      for (i = 0; i < OM_MODELS.length; i++) {
+        if (OM_MODELS[i].cc.indexOf(cc) !== -1 && inBoxes(OM_MODELS[i].area, lat, lon)) return OM_MODELS[i];
+      }
+      return OM_BEST; // a known country without a sharp model
+    }
+    for (i = 0; i < OM_MODELS.length; i++) {
+      if (inBoxes(OM_MODELS[i].core, lat, lon)) return OM_MODELS[i];
+    }
+    return OM_BEST;
+  }
+  function omHasGaps(j) {
+    var any = false;
+    ['current', 'hourly', 'daily'].forEach(function (sec) {
+      var s = j && j[sec];
+      if (!s) return;
+      Object.keys(s).forEach(function (k) {
+        if (k === 'time' || k === 'interval') return;
+        var v = s[k];
+        if (v === null) any = true;
+        else if (Array.isArray(v) && v.some(function (x) { return x === null; })) any = true;
+      });
+    });
+    return any;
+  }
+  /** Fill nulls in a (regional model) reply with the best_match reply. Returns true if any were filled. */
+  function omFill(j, b) {
+    var filled = false;
+    ['current', 'hourly', 'daily'].forEach(function (sec) {
+      var s = j && j[sec], t = b && b[sec];
+      if (!s || !t) return;
+      if (Array.isArray(s.time) && Array.isArray(t.time) && s.time.join() !== t.time.join()) return;
+      Object.keys(s).forEach(function (k) {
+        if (k === 'time' || k === 'interval') return;
+        if (s[k] === null && t[k] !== null && t[k] !== undefined) { s[k] = t[k]; filled = true; }
+        else if (Array.isArray(s[k]) && Array.isArray(t[k])) {
+          s[k] = s[k].map(function (x, i) { if (x === null && t[k][i] !== null && t[k][i] !== undefined) { filled = true; return t[k][i]; } return x; });
+        }
+      });
+    });
+    return filled;
+  }
+  /**
+   * Fetch an Open-Meteo forecast URL (without &models) with the sharpest model for the spot.
+   * Missing values (the sharp model only covers 1-4 days) are filled from best_match.
+   * Resolves { j, model, filled }.
+   */
+  function omFetch(baseUrl, lat, lon, cc, getJson) {
+    var m = omModelFor(lat, lon, cc);
+    var best = function () { return getJson(baseUrl).then(function (b) { return { j: b, model: OM_BEST, filled: false }; }); };
+    if (m === OM_BEST) return best();
+    return getJson(baseUrl + '&models=' + m.id).then(function (j) {
+      var c = j && j.current;
+      if (!c || c.temperature_2m === null || c.temperature_2m === undefined) return best(); // no data here
+      if (!omHasGaps(j)) return { j: j, model: m, filled: false };
+      return getJson(baseUrl).then(function (b) { return { j: j, model: m, filled: omFill(j, b) }; },
+        function () { return { j: j, model: m, filled: false }; });
+    }, function (e) {
+      if (e && e.name === 'AbortError') throw e;
+      return best();
+    });
+  }
+  function modelText(model, filled) {
+    if (!model) return '';
+    return 'Model: ' + model.label + (filled ? '; later hours from Open-Meteo best match' : '');
+  }
+  ReadyMap.models = { list: OM_MODELS, best: OM_BEST, pick: omModelFor, hasGaps: omHasGaps, fill: omFill, text: modelText };
+
+  /** Country lookup with a time limit, so a slow lookup never holds up the weather. */
+  function countryQuick(lat, lon, ms) {
+    var have = Country.known(lat, lon);
+    if (have !== undefined) return Promise.resolve(have);
+    return Promise.race([Country.lookup(lat, lon), new Promise(function (r) { setTimeout(function () { r(undefined); }, ms || 2500); })]);
+  }
+
+  /**
+   * Official national weather services (1.3.0), by country code. Every URL was opened on
+   * 2026-11-02 and loaded (HTTP 200). The U.S. link is built for the spot (NWS point forecast).
+   */
+  var WX_SERVICES = {
+    US: ['National Weather Service (NOAA)', 'https://www.weather.gov/'],
+    PR: ['National Weather Service (NOAA)', 'https://www.weather.gov/'],
+    VI: ['National Weather Service (NOAA)', 'https://www.weather.gov/'],
+    GU: ['National Weather Service (NOAA)', 'https://www.weather.gov/'],
+    MP: ['National Weather Service (NOAA)', 'https://www.weather.gov/'],
+    AS: ['National Weather Service (NOAA)', 'https://www.weather.gov/'],
+    CA: ['Environment Canada (ECCC)', 'https://weather.gc.ca/'],
+    GB: ['UK Met Office', 'https://www.metoffice.gov.uk/'],
+    DE: ['Deutscher Wetterdienst (DWD)', 'https://www.dwd.de/'],
+    FR: ['Météo-France', 'https://meteofrance.com/'],
+    JP: ['Japan Meteorological Agency (JMA)', 'https://www.jma.go.jp/jma/indexe.html'],
+    AU: ['Bureau of Meteorology (BoM)', 'https://www.bom.gov.au/'],
+    CR: ['Instituto Meteorológico Nacional (IMN) radar', 'https://www.imn.ac.cr/radar'],
+    MX: ['Servicio Meteorológico Nacional (SMN)', 'https://smn.conagua.gob.mx/es/'],
+    ES: ['AEMET', 'https://www.aemet.es/'],
+    IT: ['Aeronautica Militare Meteo', 'https://www.meteoam.it/'],
+    NL: ['KNMI', 'https://www.knmi.nl/'],
+    BE: ['Royal Meteorological Institute (RMI)', 'https://www.meteo.be/'],
+    CH: ['MeteoSwiss', 'https://www.meteoswiss.admin.ch/'],
+    LI: ['MeteoSwiss', 'https://www.meteoswiss.admin.ch/'],
+    AT: ['GeoSphere Austria', 'https://www.geosphere.at/'],
+    NO: ['MET Norway (Yr)', 'https://www.met.no/'],
+    SE: ['SMHI', 'https://www.smhi.se/'],
+    DK: ['DMI', 'https://www.dmi.dk/'],
+    FI: ['Finnish Meteorological Institute', 'https://en.ilmatieteenlaitos.fi/'],
+    IE: ['Met Éireann', 'https://www.met.ie/'],
+    PT: ['IPMA', 'https://www.ipma.pt/'],
+    NZ: ['MetService', 'https://www.metservice.com/'],
+    BR: ['INMET', 'https://portal.inmet.gov.br/'],
+    CL: ['Dirección Meteorológica de Chile', 'https://www.meteochile.gob.cl/'],
+    CO: ['IDEAM', 'https://www.ideam.gov.co/'],
+    UY: ['INUMET', 'https://www.inumet.gub.uy/'],
+    EC: ['INAMHI', 'https://www.inamhi.gob.ec/'],
+    BO: ['SENAMHI Bolivia', 'https://senamhi.gob.bo/'],
+    PY: ['Dirección de Meteorología e Hidrología', 'https://www.meteorologia.gov.py/'],
+    GT: ['INSIVUMEH', 'https://insivumeh.gob.gt/'],
+    DO: ['INDOMET', 'https://indomet.gob.do/'],
+    JM: ['Meteorological Service of Jamaica', 'https://metservice.gov.jm/'],
+    IN: ['India Meteorological Department (IMD)', 'https://mausam.imd.gov.in/'],
+    CN: ['China Meteorological Administration', 'https://www.cma.gov.cn/en/'],
+    KR: ['Korea Meteorological Administration', 'https://www.weather.go.kr/'],
+    TW: ['Central Weather Administration', 'https://www.cwa.gov.tw/'],
+    HK: ['Hong Kong Observatory', 'https://www.hko.gov.hk/'],
+    SG: ['Meteorological Service Singapore', 'https://www.weather.gov.sg/'],
+    MY: ['MetMalaysia', 'https://www.met.gov.my/'],
+    ID: ['BMKG', 'https://www.bmkg.go.id/'],
+    PH: ['PAGASA', 'https://www.pagasa.dost.gov.ph/'],
+    VN: ['National Center for Hydro-Meteorological Forecasting', 'https://www.nchmf.gov.vn/kttvsite/'],
+    PK: ['Pakistan Meteorological Department', 'https://www.pmd.gov.pk/'],
+    NP: ['Department of Hydrology and Meteorology', 'https://www.dhm.gov.np/'],
+    BT: ['National Center for Hydrology and Meteorology', 'https://www.nchm.gov.bt/'],
+    ZA: ['South African Weather Service', 'https://www.weathersa.co.za/'],
+    KE: ['Kenya Meteorological Department', 'https://meteo.go.ke/'],
+    PL: ['IMGW', 'https://imgw.pl/'],
+    CZ: ['CHMI', 'https://www.chmi.cz/'],
+    SK: ['SHMU', 'https://www.shmu.sk/'],
+    HU: ['HungaroMet', 'https://www.met.hu/'],
+    RO: ['Meteo Romania', 'https://www.meteoromania.ro/'],
+    SI: ['ARSO Meteo', 'https://meteo.arso.gov.si/'],
+    HR: ['DHMZ', 'https://meteo.hr/'],
+    LT: ['Lithuanian Hydrometeorological Service', 'https://www.meteo.lt/'],
+    EE: ['Estonian Environment Agency', 'https://www.ilmateenistus.ee/'],
+    UA: ['Ukrainian Hydrometeorological Center', 'https://www.meteo.gov.ua/'],
+    TR: ['Turkish State Meteorological Service', 'https://www.mgm.gov.tr/'],
+    IL: ['Israel Meteorological Service', 'https://ims.gov.il/'],
+    IS: ['Icelandic Met Office', 'https://www.vedur.is/']
+  };
+  /** { name, url } of the official weather service for a country, or null. */
+  function officialService(cc, lat, lon) {
+    var s = cc && WX_SERVICES[cc];
+    if (!s) return null;
+    var url = s[1];
+    if (cc === 'US' && isFinite(lat) && isFinite(lon)) {
+      url = 'https://forecast.weather.gov/MapClick.php?lat=' + Number(lat).toFixed(4) + '&lon=' + Number(lon).toFixed(4);
+    }
+    return { name: s[0], url: url };
+  }
+  ReadyMap.officialService = officialService;
+  ReadyMap.wxServices = WX_SERVICES;
+
+  // ---------------------------------------------------------------------------
   // 14. Weather overlays
   // ---------------------------------------------------------------------------
   var Weather = (function () {
@@ -2012,6 +2258,28 @@
     var ALERT_REFRESH_MS = 5 * 60 * 1000;
     var CAPS_MAX_AGE = 4 * 60 * 1000;
     var OFFLINE_MSG = 'Weather needs internet. Try again when you have signal.';
+    // 1.3.0: sharper national radar, used automatically when zoomed in over that country.
+    // Both servers send Access-Control-Allow-Origin: * and were checked to return radar tiles
+    // (EPSG:3857 PNG) on 2026-11-02. boxes: [south, west, north, east].
+    var NATIONAL_MIN_ZOOM = 6;
+    var NATIONAL_RADARS = [
+      { id: 'eccc', cc: 'CA', name: 'Environment Canada', where: 'Canada',
+        url: 'https://geo.weather.gc.ca/geomet', layer: 'RADAR_1KM_RRAI',
+        caps: 'https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=RADAR_1KM_RRAI',
+        boxes: [[41.6, -141.1, 72, -52.5]],
+        attribution: 'Radar: <a href="https://eccc-msc.github.io/open-data/licence/readme_en/">Environment and Climate Change Canada</a>',
+        note: 'Canada radar from Environment Canada (1 km detail, every 6 minutes). Used when you zoom in over Canada.' },
+      { id: 'dwd', cc: 'DE', name: 'DWD', where: 'Germany',
+        url: 'https://maps.dwd.de/geoserver/dwd/wms', layer: 'dwd:RADOLAN-RY', capsLayer: 'RADOLAN-RY',
+        caps: 'https://maps.dwd.de/geoserver/dwd/RADOLAN-RY/ows?service=WMS&version=1.3.0&request=GetCapabilities',
+        boxes: [[47.2, 5.8, 55.1, 15.1]],
+        attribution: 'Radar: <a href="https://www.dwd.de/">Deutscher Wetterdienst (DWD)</a>',
+        note: 'Germany radar from the DWD (1 km detail, every 5 minutes). Used when you zoom in over Germany.' }
+    ];
+    function nationalById(id) {
+      for (var i = 0; i < NATIONAL_RADARS.length; i++) if (NATIONAL_RADARS[i].id === id) return NATIONAL_RADARS[i];
+      return null;
+    }
 
     var capsCache = {}; // url -> {text, at}
     var zoneCache = new Map(); // zone url -> geometry|null
@@ -2023,7 +2291,7 @@
     // back to RainViewer).
     var radar = { on: false, mode: 'noaa', layer: null, frames: [], frameLayers: [], idx: 0, timer: null,
       playing: false, lastGood: null, gen: 0, errors: 0, loads: 0, fallbackGen: -1, fallbackFlight: null,
-      area: 'auto', pick: 'noaa', moveTimer: null };
+      area: 'auto', pick: 'noaa', moveTimer: null, nat: null };
     var sat = { on: false, kind: 'goes_longwave_imagery', layer: null, lastGood: null, gen: 0 };
     var gdacs = { on: false, layer: null, gen: 0, ctrl: null, features: [], lastGood: null, listTimer: null };
     var alerts = { on: false, layer: null, renderer: null, timer: null, lastGood: null, lastFetch: 0, gen: 0,
@@ -2038,7 +2306,7 @@
     function getCaps(url) {
       var c = capsCache[url];
       if (c && Date.now() - c.at < CAPS_MAX_AGE) return Promise.resolve(c.text);
-      var capsUrl = url + '?service=WMS&version=1.3.0&request=GetCapabilities';
+      var capsUrl = url.indexOf('?') !== -1 ? url : url + '?service=WMS&version=1.3.0&request=GetCapabilities';
       return fetchWithTimeout(capsUrl, { credentials: 'omit' }, FETCH_TIMEOUT_MS).then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.text();
@@ -2089,15 +2357,60 @@
           updateWhenIdle: true, attribution: RAINVIEWER_ATTRIBUTION
         });
       }
+      if (radar.mode === 'national' && radar.nat) {
+        return wmsLayer(radar.nat.url, radar.nat.layer, frame.time, opac, radar.nat.attribution);
+      }
       return wmsLayer(RADAR_WMS, RADAR_LAYER, frame.time, opac, NOAA_ATTRIBUTION);
     }
 
-    /** Should this radar generation use NOAA? (auto: only when the map center is in NOAA coverage) */
-    function radarWantsNoaa() {
-      if (radar.area === 'us') return true;
-      if (radar.area === 'world') return false;
+    /**
+     * Which radar this generation should use: 'noaa' | 'world' | a national radar id.
+     * Auto: a national radar when zoomed in (zoom 6+) over that country, NOAA in its coverage,
+     * RainViewer elsewhere. Near borders the country is looked up once per area (cached); until
+     * it is known, NOAA wins inside NOAA coverage.
+     */
+    function radarWant() {
+      if (radar.area === 'us') return 'noaa';
+      if (radar.area === 'world') return 'world';
       var c = state.map.getCenter();
-      return inNoaaRadarCoverage(c.lat, c.lng);
+      var lat = c.lat, lon = wrapLon(c.lng);
+      var noaa = inNoaaRadarCoverage(lat, lon);
+      if (state.map.getZoom() >= NATIONAL_MIN_ZOOM) {
+        for (var i = 0; i < NATIONAL_RADARS.length; i++) {
+          var n = NATIONAL_RADARS[i];
+          if (!inBoxes(n.boxes, lat, lon)) continue;
+          var cc = Country.known(lat, lon);
+          if (cc === undefined) {
+            Country.lookup(lat, lon).then(function () {
+              if (radar.on && radar.area === 'auto' && radarWant() !== radar.pick) radarOn();
+            });
+            if (!noaa) return n.id;
+            continue;
+          }
+          if (cc === n.cc || (cc === null && !noaa)) return n.id;
+        }
+      }
+      return noaa ? 'noaa' : 'world';
+    }
+    function radarWantsNoaa() { return radarWant() === 'noaa'; }
+
+    function radarNational(nat, gen) {
+      showLegend('legend-radar', legendUrl(nat.url, nat.layer));
+      $('legend-radar').alt = 'Radar color key from ' + nat.name;
+      getCaps(nat.caps).then(function (xml) {
+        if (gen !== radar.gen) return;
+        var dim = parseWmsDimension(xml, nat.capsLayer || nat.layer);
+        if (!dim.times.length) throw new Error('no times');
+        var latest = dim.def && dim.def >= dim.times[dim.times.length - 1] ? dim.def : dim.times[dim.times.length - 1];
+        if (Date.parse(latest) > Date.now() + 5 * 60000) throw new Error('bad time');
+        var frames = pickFrames(dim.times.filter(function (t) { return t <= latest; }), MAX_FRAMES, 9 * 60000, 70 * 60000);
+        radar.mode = 'national';
+        radar.nat = nat;
+        showRadarFrames(frames.map(function (t) { return { time: t.replace('.000Z', 'Z'), date: new Date(t) }; }));
+      }).catch(function () {
+        if (gen !== radar.gen) return;
+        useRainViewer(gen);
+      });
     }
 
     function radarOn() {
@@ -2105,11 +2418,14 @@
       setToggle('toggle-radar', true);
       var gen = ++radar.gen;
       $('radar-note').textContent = '';
-      radar.pick = radarWantsNoaa() ? 'noaa' : 'world';
+      radar.pick = radarWant();
       if (!navigator.onLine) { radarOffline(); return; }
       $('time-radar').textContent = 'Loading…';
       if (radar.pick === 'world') { useRainViewer(gen); return; }
+      var nat = nationalById(radar.pick);
+      if (nat) { radarNational(nat, gen); return; }
       showLegend('legend-radar', legendUrl(RADAR_WMS, RADAR_LAYER));
+      $('legend-radar').alt = 'Radar color key from NOAA, in dBZ (rain strength)';
       getCaps(RADAR_WMS).then(function (xml) {
         if (gen !== radar.gen) return;
         var dim = parseWmsDimension(xml, RADAR_TIME_LAYER);
@@ -2133,7 +2449,7 @@
       var latest = frames[frames.length - 1];
       var layer = makeRadarLayer(latest, radarOpacity());
       var gen = radar.gen;
-      var isNoaa = radar.mode === 'noaa';
+      var isNoaa = radar.mode !== 'rainviewer'; // NOAA or a national radar: RainViewer is the backup
       // Count per viewport load: Leaflet fires 'loading' when a new batch of tiles starts
       // (pan/zoom) and 'load' when every tile of the batch has finished (errors included).
       layer.on('loading', function () { radar.errors = 0; radar.loads = 0; });
@@ -2161,12 +2477,15 @@
         $('radar-note').textContent = 'World radar from RainViewer. It is less detailed when you zoom in close.';
       } else if (radar.mode === 'rainviewer') {
         $('radar-note').textContent = 'Using backup radar (RainViewer).';
+      } else if (radar.mode === 'national' && radar.nat) {
+        $('radar-note').textContent = radar.nat.note;
       } else {
         $('radar-note').textContent = 'U.S. radar from NOAA. It covers the U.S. and its territories.';
       }
     }
 
     function radarSourceText() {
+      if (radar.mode === 'national' && radar.nat) return ' · ' + radar.nat.name + ' (' + radar.nat.where + ')';
       if (radar.mode !== 'rainviewer') return ' · NOAA (U.S.)';
       return radar.pick === 'world' ? ' · RainViewer (world)' : ' · RainViewer (backup)';
     }
@@ -2176,7 +2495,7 @@
       clearTimeout(radar.moveTimer);
       radar.moveTimer = setTimeout(function () {
         if (!radar.on || radar.area !== 'auto') return;
-        var want = radarWantsNoaa() ? 'noaa' : 'world';
+        var want = radarWant();
         if (want !== radar.pick) radarOn();
       }, 800);
     }
@@ -2188,7 +2507,9 @@
       if (radar.fallbackGen === gen) return Promise.resolve();
       if (!navigator.onLine) { radarOffline(); return Promise.resolve(); }
       radar.fallbackGen = gen;
-      $('radar-note').textContent = radar.pick === 'world' ? 'Loading world radar…' : 'NOAA radar is not loading. Trying backup radar…';
+      var natFail = nationalById(radar.pick);
+      $('radar-note').textContent = radar.pick === 'world' ? 'Loading world radar…'
+        : natFail ? natFail.where + ' radar is not loading. Trying backup radar…' : 'NOAA radar is not loading. Trying backup radar…';
       var flight = fetchWithTimeout(RAINVIEWER_API, { credentials: 'omit' }, FETCH_TIMEOUT_MS).then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();
@@ -3279,11 +3600,15 @@
       ALERTS_API: ALERTS_API,
       alertFeatures: alertFeatures,
       openAlert: openAlert,
-      state: { radar: radar, sat: sat, alerts: alerts, gdacs: gdacs, ocean: ocean }
+      state: { radar: radar, sat: sat, alerts: alerts, gdacs: gdacs, ocean: ocean },
+      nationalRadars: NATIONAL_RADARS,
+      radarWant: radarWant
     };
   })();
 
   ReadyMap.weather.state = Weather.state;
+  ReadyMap.weather.nationalRadars = Weather.nationalRadars;
+  ReadyMap.weather.radarWant = Weather.radarWant;
 
   // ---------------------------------------------------------------------------
   // 14b. Weather news (official headlines for the map area)
@@ -3868,7 +4193,12 @@
         '&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m' +
         '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max' +
         '&forecast_days=7&forecast_hours=24&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph';
-      return getJsonRetry(url, null, signal).then(function (j) {
+      var model = OM_BEST, filled = false;
+      return countryQuick(pt.lat, pt.lon).then(function (cc) {
+        return omFetch(url, pt.lat, pt.lon, cc, function (u) { return getJsonRetry(u, null, signal); });
+      }).then(function (got) {
+        var j = got.j;
+        model = got.model; filled = got.filled;
         var c = (j && j.current) || {};
         var h = (j && j.hourly) || {};
         var d = (j && j.daily) || {};
@@ -3884,7 +4214,7 @@
         });
         if (num(c.temperature_2m) === null && !hourly.length) throw new Error('empty');
         return {
-          src: 'om', place: '', hourly: hourly, daily: daily,
+          src: 'om', place: '', hourly: hourly, daily: daily, model: model, modelFilled: filled,
           now: { tempF: num(c.temperature_2m), feelsF: num(c.apparent_temperature), sky: c.weather_code !== undefined ? wmoCodeText(c.weather_code) : '',
             windMph: num(c.wind_speed_10m), windDeg: num(c.wind_direction_10m), gustMph: num(c.wind_gusts_10m),
             humidity: num(c.relative_humidity_2m), localTime: str(c.time, 20) },
@@ -4082,6 +4412,8 @@
       } else if (r.src === 'om' && n && n.localTime) {
         parts.push('Model data (not a weather station), for ' + hourLabel(n.localTime) + ' local time there.');
       }
+      if (r.model) parts.push(modelText(r.model, r.modelFilled) + '.');
+      else if (r.src === 'nws') parts.push('Model: NWS forecast grid (2.5 km).');
       box.appendChild(textNode(parts.join(' ') + ' '));
       if (r.src !== 'nws') {
         box.appendChild(el('a', { href: 'https://open-meteo.com/', target: '_blank', rel: 'noopener noreferrer', text: 'Weather data by Open-Meteo.com' }));
@@ -4250,7 +4582,7 @@
     var MOVE_M = 5000;            // refetch when the weather point moves more than 5 km
     var TICK_MS = 60 * 1000;
     var SAVED_MAX_MS = 24 * 3600 * 1000;
-    var wc = { pt: null, at: 0, shown: null, timer: null, moveTimer: null };
+    var wc = { pt: null, at: 0, shown: null, timer: null, moveTimer: null, listeners: [] };
 
     function nowOf(r) {
       var n = r && r.now;
@@ -4285,19 +4617,33 @@
       $('wx-chip-sep').hidden = !sky;
       $('wx-chip-sky').textContent = sky;
       $('wx-chip-saved').hidden = !saved;
-      var label = 'Weather now: ' + t + (v.sky ? ', ' + v.sky : '') +
+      var srcEl = $('wx-chip-src');
+      if (srcEl) { srcEl.textContent = v.src === 'station' ? 'station' : v.src === 'model' ? 'model' : ''; srcEl.hidden = !srcEl.textContent; }
+      var label = 'Weather now: ' + t + (v.sky ? ', ' + v.sky : '') + (srcText(v) ? ', ' + srcText(v) : '') +
         (saved ? '. Saved from ' + formatLocalTime(new Date(v.at)) + ', not new' : '') + '. Open local weather.';
       b.setAttribute('aria-label', label);
       b.title = label;
       b.classList.toggle('wx-chip-saved', !!saved);
       b.hidden = false;
       wc.shown = { v: v, saved: !!saved };
+      wc.listeners.forEach(function (fn) { try { fn(wc.shown); } catch (e) { /* ignore */ } });
+    }
+    /** "from weather station KSLC" / "from forecast model NOAA HRRR (3 km)" */
+    function srcText(v) {
+      if (!v || !v.src) return '';
+      if (v.src === 'station') return 'from weather station' + (v.srcName ? ' ' + v.srcName : '');
+      return 'from forecast model' + (v.srcName ? ' ' + v.srcName : '');
     }
 
     function fromResult(r, saved) {
       var n = nowOf(r);
       if (!n) return null;
-      return { tempF: n.tempF, sky: n.sky, at: r.fetchedAt, lat: r.lat, lon: r.lon };
+      var rn = r.now;
+      var station = rn && rn.station && !rn.fromForecast && rn.tempF !== null && rn.tempF !== undefined;
+      return { tempF: n.tempF, sky: n.sky, at: r.fetchedAt, lat: r.lat, lon: r.lon,
+        src: station ? 'station' : 'model',
+        srcName: station ? String(rn.station).split(' ')[0] : (r.model ? r.model.label : r.src === 'nws' ? 'NWS forecast grid (2.5 km)' : ''),
+        obsTime: station && rn.obsTime ? rn.obsTime.getTime() : null };
     }
 
     function onResult(r) {
@@ -4353,7 +4699,8 @@
       check(true);
     }
 
-    return { init: init, check: check, state: wc, shortSky: shortSky };
+    function onShow(fn) { wc.listeners.push(fn); }
+    return { init: init, check: check, state: wc, shortSky: shortSky, onShow: onShow, srcText: srcText };
   })();
   ReadyMap.wxChip = { state: WxChip.state, check: WxChip.check, shortSky: WxChip.shortSky };
 
@@ -4367,7 +4714,9 @@
     var FORECAST = 'https://api.open-meteo.com/v1/forecast';
     var MARINE = 'https://marine-api.open-meteo.com/v1/marine';
     var FRESH_MS = 5 * 60 * 1000;
-    var sw = { cache: {}, gen: 0, ctrl: null, key: null, timer: null };
+    var sw = { cache: {}, gen: 0, ctrl: null, key: null, timer: null, shown: null };
+    var SAME_SPOT_M = 2000;        // 1.3.0: this close to the top-bar chip's spot -> reuse its reading
+    var CHIP_MAX_AGE_MS = 30 * 60 * 1000;
 
     function keyOf(lat, lon) { return lat.toFixed(2) + ',' + lon.toFixed(2); }
     function num(v) { return v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v); }
@@ -4442,17 +4791,37 @@
       dl.appendChild(el('dd', { className: cls || '', text: value }));
     }
     function setStatus(text) { $('spotwx-status').textContent = text || ''; $('spotwx-status').hidden = !text; }
+    /** The top-bar chip's reading, if it is fresh and for (nearly) the same spot. */
+    function chipMatch(lat, lon) {
+      var sh = WxChip.state.shown;
+      if (!sh || sh.saved || !sh.v || !isFinite(sh.v.lat) || !isFinite(sh.v.lon)) return null;
+      if (Date.now() - sh.v.at > CHIP_MAX_AGE_MS) return null;
+      if (distanceMeters(lat, lon, sh.v.lat, sh.v.lon) > SAME_SPOT_M) return null;
+      return sh.v;
+    }
     function renderEntry(e, saved) {
+      sw.shown = { e: e, saved: !!saved };
       var dl = $('spotwx-facts');
       clear(dl);
       var line = [];
+      var chip = saved ? null : chipMatch(e.lat, e.lon);
       if (e.wx) {
-        row(dl, 'Air', tBoth(e.wx.tempF));
-        row(dl, 'Sky', e.wx.sky || '—');
+        var airF = chip ? chip.tempF : e.wx.tempF;
+        var sky = chip && chip.sky ? chip.sky : e.wx.sky;
+        row(dl, 'Air', tBoth(airF));
+        row(dl, 'Sky', sky || '—');
         row(dl, 'Wind', windLine(e.wx));
         row(dl, 'Today', hiLoLine(e.wx));
-        if (e.wx.tempF !== null) line.push(tBoth(e.wx.tempF));
-        if (e.wx.sky) line.push(e.wx.sky);
+        var src;
+        if (chip) {
+          src = 'Same as the top bar: ' + (chip.src === 'station' ? 'weather station' + (chip.srcName ? ' ' + chip.srcName : '') +
+            (chip.obsTime ? ', reading at ' + formatLocalTime(new Date(chip.obsTime)) : '') : 'forecast model' + (chip.srcName ? ' ' + chip.srcName : ''));
+        } else {
+          src = 'Forecast model: ' + (e.model ? e.model.label : OM_BEST.label) + (e.filled ? ' (later hours: best match)' : '');
+        }
+        row(dl, 'Source', src, 'spotwx-src');
+        if (airF !== null) line.push(tBoth(airF));
+        if (sky) line.push(sky);
       }
       if (e.marine) {
         row(dl, 'Sea temp', cBoth(e.marine.sstC), 'spotwx-marine');
@@ -4463,13 +4832,30 @@
       var t = formatLocalTime(new Date(e.at));
       $('spotwx-updated').textContent = e.wx || e.marine
         ? (saved ? 'Saved from ' + t + ': this is the last weather we got here, not new.' : 'Updated ' + t + '.') +
+          (chip && chip.src === 'station' ? ' Air and sky: National Weather Service station.' : '') +
           ' Weather data by Open-Meteo.com (CC BY 4.0).'
         : '';
       var pw = $('point-wx');
       pw.textContent = line.length ? (saved ? 'Saved: ' : 'Weather: ') + line.join(' · ') : '';
       pw.hidden = !line.length;
+      renderOfficial(e.lat, e.lon);
+    }
+    /** "Official weather service" link for the spot's country (1.3.0). */
+    function renderOfficial(lat, lon) {
+      var box = $('spotwx-official');
+      if (!box) return;
+      var cc = Country.known(lat, lon);
+      var svc = officialService(cc, lat, lon);
+      clear(box);
+      if (!svc) { box.hidden = true; return; }
+      var country = Country.nameOf(lat, lon);
+      box.appendChild(textNode('Official weather service' + (country ? ' (' + country + ')' : '') + ': '));
+      box.appendChild(el('a', { href: svc.url, target: '_blank', rel: 'noopener noreferrer', text: svc.name }));
+      box.hidden = false;
     }
     function renderEmpty(msg) {
+      sw.shown = null;
+      if ($('spotwx-official')) { clear($('spotwx-official')); $('spotwx-official').hidden = true; }
       clear($('spotwx-facts'));
       $('spotwx-facts').hidden = true;
       $('spotwx-updated').textContent = '';
@@ -4481,11 +4867,15 @@
     function fetchSpot(lat, lon, signal) {
       var settle = function (p) { return p.then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, e: e }; }); };
       return Promise.all([
-        settle(getJson(forecastUrl(lat, lon), signal).then(parseForecast)),
+        settle(countryQuick(lat, lon).then(function (cc) {
+          return omFetch(forecastUrl(lat, lon), lat, lon, cc, function (u) { return getJson(u, signal); });
+        }).then(function (got) { return { wx: parseForecast(got.j), model: got.model, filled: got.filled }; })),
         settle(getJson(marineUrl(lat, lon), signal).then(parseMarine))
       ]).then(function (r) {
         if (!r[0].ok && !r[1].ok) throw r[0].e || new Error('failed');
-        return { wx: r[0].ok ? r[0].v : null, marine: r[1].ok ? r[1].v : null, wxFailed: !r[0].ok, marineFailed: !r[1].ok, at: Date.now(),
+        var wx = r[0].ok ? r[0].v.wx : null;
+        return { wx: wx, model: r[0].ok ? r[0].v.model : null, filled: r[0].ok ? r[0].v.filled : false,
+          marine: r[1].ok ? r[1].v : null, wxFailed: !r[0].ok, marineFailed: !r[1].ok, at: Date.now(),
           lat: lat, lon: lon };
       });
     }
@@ -4517,6 +4907,9 @@
       if (sw.ctrl) sw.ctrl.abort();
       var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
       sw.ctrl = ctrl;
+      Country.lookup(lat, lon).then(function () {
+        if (sw.key === key && sw.shown && keyOf(sw.shown.e.lat, sw.shown.e.lon) === key) renderOfficial(lat, lon);
+      });
       return fetchSpot(lat, lon, ctrl && ctrl.signal).then(function (e) {
         sw.cache[key] = e;
         if (gen !== sw.gen || sw.key !== key) return;
@@ -4540,14 +4933,278 @@
       });
       window.addEventListener('online', function () { sw.key = null; update(); });
       window.addEventListener('offline', function () { sw.key = null; update(); });
+      // The chip got a new reading: re-show the spot so the two numbers stay the same.
+      WxChip.onShow(function () {
+        var cur = sw.shown;
+        if (cur && !cur.saved && sw.key === keyOf(cur.e.lat, cur.e.lon)) renderEntry(cur.e, false);
+      });
       update();
     }
 
     return { init: init, update: update, state: sw, parseForecast: parseForecast, parseMarine: parseMarine,
-      forecastUrl: forecastUrl, marineUrl: marineUrl, waveLine: waveLine };
+      forecastUrl: forecastUrl, marineUrl: marineUrl, waveLine: waveLine, chipMatch: chipMatch };
   })();
   ReadyMap.spotWeather = { state: SpotWx.state, update: SpotWx.update, parseForecast: SpotWx.parseForecast,
-    parseMarine: SpotWx.parseMarine, forecastUrl: SpotWx.forecastUrl, marineUrl: SpotWx.marineUrl, waveLine: SpotWx.waveLine };
+    parseMarine: SpotWx.parseMarine, forecastUrl: SpotWx.forecastUrl, marineUrl: SpotWx.marineUrl, waveLine: SpotWx.waveLine,
+    chipMatch: SpotWx.chipMatch };
+
+  // ---------------------------------------------------------------------------
+  // 14d. Weather stations layer (1.3.0): live airport weather reports (METAR/ASOS/AWOS) worldwide.
+  // aviationweather.gov has no CORS header, so a browser page cannot read it. The Iowa Environmental
+  // Mesonet "currents" API carries the same reports and allows any origin. stations.json (shipped
+  // with the app) lists ~5,000 reporting stations; at zoom 7+ we ask for up to 60 stations in view,
+  // in one request, at most once every 20 seconds, and keep each reading for 10 minutes.
+  // ---------------------------------------------------------------------------
+  var Stations = (function () {
+    var INDEX_URL = 'stations.json';
+    var API = 'https://mesonet.agron.iastate.edu/api/1/currents.json';
+    var MIN_ZOOM = 7, MAX_STATIONS = 60, FRESH_MS = 10 * 60 * 1000, MIN_GAP_MS = 20 * 1000, MOVE_WAIT_MS = 800;
+    var OLD_MS = 2 * 3600 * 1000, DROP_MS = 12 * 3600 * 1000;
+    var ATTRIBUTION = 'Stations: <a href="https://mesonet.agron.iastate.edu/">Iowa Environmental Mesonet</a> (METAR)';
+    var st = { on: false, index: null, indexFlight: null, layer: null, markers: new Map(), obs: new Map(), lastReq: 0,
+      flight: null, timer: null, moveTimer: null, gen: 0, lastGood: null, shownIds: [], requests: 0 };
+
+    function setToggle(on) { $('toggle-stations').setAttribute('aria-checked', on ? 'true' : 'false'); }
+    function note(t) { $('stations-note').textContent = t || ''; }
+    function opac() { return Number($('opacity-stations').value) / 100; }
+
+    function loadIndex() {
+      if (st.index) return Promise.resolve(st.index);
+      if (st.indexFlight) return st.indexFlight;
+      st.indexFlight = fetchWithTimeout(INDEX_URL, {}, FETCH_TIMEOUT_MS).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (j) {
+        var list = (j && Array.isArray(j.stations) ? j.stations : []).filter(function (s) {
+          return Array.isArray(s) && /^[A-Z0-9]{3,5}$/.test(s[0]) && isFinite(s[1]) && isFinite(s[2]);
+        });
+        if (!list.length) throw new Error('empty index');
+        st.index = list;
+        return list;
+      }).finally(function () { st.indexFlight = null; });
+      return st.indexFlight;
+    }
+
+    /** Stations in view (a little padding), thinned on a grid to at most MAX_STATIONS. */
+    function visibleIds() {
+      if (!st.index || !state.map) return [];
+      var b = state.map.getBounds().pad(0.1);
+      var s = b.getSouth(), n = b.getNorth(), w = wrapLon(b.getWest()), e = wrapLon(b.getEast());
+      var wrap = w > e;
+      var inView = st.index.filter(function (x) {
+        if (x[1] < s || x[1] > n) return false;
+        return wrap ? (x[2] >= w || x[2] <= e) : (x[2] >= w && x[2] <= e);
+      });
+      if (inView.length <= MAX_STATIONS) return inView.map(function (x) { return x[0]; });
+      var cols = 8, rows = 10, cells = {}, out = [];
+      var width = wrap ? (e + 360 - w) : (e - w);
+      inView.forEach(function (x) {
+        var dx = wrap && x[2] < w ? x[2] + 360 - w : x[2] - w;
+        var c = Math.min(cols - 1, Math.floor(dx / (width || 1) * cols));
+        var r = Math.min(rows - 1, Math.floor((x[1] - s) / ((n - s) || 1) * rows));
+        var k = r + ':' + c;
+        // Prefer 4-letter ICAO airports (the main reporting stations) in each cell.
+        if (!cells[k] || (cells[k][0].length !== 4 && x[0].length === 4)) cells[k] = x;
+      });
+      Object.keys(cells).forEach(function (k) { out.push(cells[k][0]); });
+      return out.slice(0, MAX_STATIONS);
+    }
+
+    function tempLabel(f) { return f === null || f === undefined ? '—' : Math.round(f) + '°'; }
+    function obsAge(o) { var t = Date.parse(o.utc_valid); return isNaN(t) ? Infinity : Date.now() - t; }
+
+    function popupFor(o) {
+      var box = el('div', { className: 'stn-pop' });
+      box.appendChild(el('p', { className: 'stn-name', text: (o.name || o.station) + ' (' + o.station + ')' }));
+      var dl = el('dl', { className: 'lw-facts' });
+      var add = function (k, v) { dl.appendChild(el('dt', { text: k })); dl.appendChild(el('dd', { text: v })); };
+      add('Temp', o.tmpf === null ? '—' : Math.round(o.tmpf) + '°F / ' + Math.round(fToC(o.tmpf)) + '°C');
+      var wind = '—';
+      if (o.sknt !== null) {
+        var mph = Math.round(o.sknt * 1.150779);
+        var dir = degToCompass(o.drct);
+        wind = mph === 0 ? 'Calm' : mph + ' mph' + (dir ? ' from the ' + compassWords(dir) + ' (' + dir + ')' : '');
+        if (o.gust !== null && Math.round(o.gust * 1.150779) > mph) wind += ', gusts ' + Math.round(o.gust * 1.150779) + ' mph';
+      }
+      add('Wind', wind);
+      add('Visibility', o.vsby === null ? '—' : (o.vsby >= 9.9 ? '10+ miles (16+ km)' :
+        (Math.round(o.vsby * 10) / 10) + ' miles (' + (Math.round(o.vsby * 1.609344 * 10) / 10) + ' km)'));
+      var t = Date.parse(o.utc_valid);
+      var ago = isNaN(t) ? '' : Math.max(0, Math.round((Date.now() - t) / 60000));
+      add('Observed', isNaN(t) ? '—' : formatLocalTime(new Date(t)) + ' (' + (ago < 90 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago') + ')');
+      box.appendChild(dl);
+      box.appendChild(el('p', { className: 'fine', text: 'Airport weather report (METAR) via Iowa Environmental Mesonet.' }));
+      return box;
+    }
+
+    function markerFor(o) {
+      var old = obsAge(o) > OLD_MS;
+      var label = tempLabel(o.tmpf);
+      var icon = L.divIcon({ className: 'stn-icon' + (old ? ' stn-old' : ''), html: '<span>' + label + '</span>', iconSize: [40, 22], iconAnchor: [20, 11] });
+      var m = L.marker([o.lat, o.lon], { icon: icon, keyboard: true, opacity: opac(),
+        title: (o.name || o.station) + ': ' + (o.tmpf === null ? 'no temperature' : Math.round(o.tmpf) + '°F') + (old ? ' (old reading)' : ''),
+        alt: 'Weather station ' + o.station });
+      m.bindPopup(function () { return popupFor(o); }, { maxWidth: 260 });
+      m._stnKey = o.station + '|' + o.utc_valid + '|' + label;
+      return m;
+    }
+
+    function draw(ids) {
+      if (!st.layer) return;
+      var want = {};
+      ids.forEach(function (id) {
+        var c = st.obs.get(id);
+        if (c && c.o && obsAge(c.o) < DROP_MS && isFinite(c.o.lat) && isFinite(c.o.lon)) want[id] = c.o;
+      });
+      st.markers.forEach(function (m, id) {
+        var o = want[id];
+        if (!o || m._stnKey !== o.station + '|' + o.utc_valid + '|' + tempLabel(o.tmpf)) {
+          if (m.isPopupOpen && m.isPopupOpen() && o) return; // keep an open popup until it closes
+          st.layer.removeLayer(m);
+          st.markers.delete(id);
+        }
+      });
+      Object.keys(want).forEach(function (id) {
+        if (st.markers.has(id)) return;
+        var m = markerFor(want[id]);
+        st.markers.set(id, m);
+        st.layer.addLayer(m);
+      });
+      st.shownIds = Object.keys(want);
+    }
+
+    function timeText() {
+      if (!st.lastGood) return 'Not loaded';
+      var newest = 0;
+      st.shownIds.forEach(function (id) { var c = st.obs.get(id); var t = c && c.o ? Date.parse(c.o.utc_valid) : NaN; if (!isNaN(t) && t > newest) newest = t; });
+      return 'Updated ' + formatLocalTime(st.lastGood) + ' · ' + st.shownIds.length + ' station' + (st.shownIds.length === 1 ? '' : 's') +
+        (newest ? ' · newest reading ' + formatLocalTime(new Date(newest)) : '');
+    }
+
+    function refresh() {
+      if (!st.on || !state.map) return;
+      clearTimeout(st.timer);
+      var z = state.map.getZoom();
+      if (z < MIN_ZOOM) {
+        draw([]);
+        note('Zoom in closer to see weather stations (zoom level 7 or closer; now ' + Math.round(z) + '). Tip: pinch out over a city.');
+        $('time-stations').textContent = st.lastGood ? timeText() : 'Waiting for zoom';
+        return;
+      }
+      var ids = visibleIds();
+      draw(ids);
+      if (!ids.length) { note('No airport weather stations in this view.'); $('time-stations').textContent = timeText(); return; }
+      var now = Date.now();
+      var need = ids.filter(function (id) { var c = st.obs.get(id); return !c || now - c.at >= FRESH_MS; });
+      if (!need.length) { note(''); $('time-stations').textContent = timeText(); return; }
+      if (!navigator.onLine) {
+        note('Weather stations need internet.' + (st.shownIds.length ? ' Showing readings we got earlier.' : ''));
+        $('time-stations').textContent = st.lastGood ? timeText() + ' (old)' : 'Not loaded';
+        return;
+      }
+      if (st.flight) return; // the reply re-checks the view
+      var wait = st.lastReq + MIN_GAP_MS - now;
+      if (wait > 0) { st.timer = setTimeout(refresh, wait); return; }
+      request(need);
+    }
+
+    function request(ids) {
+      var gen = st.gen;
+      st.lastReq = Date.now();
+      st.requests++;
+      if (!st.shownIds.length) $('time-stations').textContent = 'Loading…';
+      var url = API + '?' + ids.map(function (id) { return 'station=' + encodeURIComponent(id); }).join('&');
+      st.flight = fetchWithTimeout(url, { credentials: 'omit' }, FETCH_TIMEOUT_MS).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (j) {
+        if (gen !== st.gen) return;
+        var at = Date.now();
+        var asked = {};
+        ids.forEach(function (id) { asked[id] = true; st.obs.set(id, { o: null, at: at }); });
+        (j && Array.isArray(j.data) ? j.data : []).forEach(function (r) {
+          if (!r || !asked[r.station]) return;
+          var num = function (v) { return v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v); };
+          var o = { station: String(r.station), name: typeof r.name === 'string' ? r.name.slice(0, 80) : '',
+            tmpf: num(r.tmpf), sknt: num(r.sknt), drct: num(r.drct), gust: num(r.gust), vsby: num(r.vsby),
+            utc_valid: typeof r.utc_valid === 'string' ? r.utc_valid : '', lat: num(r.lat), lon: num(r.lon) };
+          if (o.tmpf === null || o.lat === null || o.lon === null) return;
+          st.obs.set(o.station, { o: o, at: at });
+        });
+        st.lastGood = new Date();
+        note('');
+      }).catch(function () {
+        if (gen !== st.gen) return;
+        note(navigator.onLine ? 'Weather stations could not load right now. We will try again when you move the map.' : 'Weather stations need internet.');
+      }).finally(function () {
+        st.flight = null;
+        if (gen !== st.gen) return;
+        // Draw what we have and fetch anything still missing (throttled).
+        var ids2 = state.map.getZoom() >= MIN_ZOOM ? visibleIds() : [];
+        draw(ids2);
+        $('time-stations').textContent = timeText();
+        if (ids2.some(function (id) { return !st.obs.has(id); })) {
+          clearTimeout(st.timer);
+          st.timer = setTimeout(refresh, Math.max(0, st.lastReq + MIN_GAP_MS - Date.now()));
+        }
+      });
+    }
+
+    function on() {
+      st.on = true;
+      st.gen++;
+      setToggle(true);
+      if (!st.layer) st.layer = L.layerGroup();
+      st.layer.addTo(state.map);
+      if (state.map.attributionControl) state.map.attributionControl.addAttribution(ATTRIBUTION);
+      $('time-stations').textContent = 'Loading…';
+      note('');
+      loadIndex().then(function () { refresh(); }, function () {
+        note('The station list could not load. Reload the page and try again.');
+        $('time-stations').textContent = 'Not loaded';
+      });
+    }
+    function off() {
+      st.on = false;
+      st.gen++;
+      clearTimeout(st.timer);
+      setToggle(false);
+      if (st.layer) { st.layer.clearLayers(); state.map.removeLayer(st.layer); }
+      st.markers.clear();
+      st.shownIds = [];
+      if (state.map.attributionControl) state.map.attributionControl.removeAttribution(ATTRIBUTION);
+      $('time-stations').textContent = 'Off';
+      note('');
+    }
+
+    function init() {
+      if (!$('toggle-stations') || !state.map) return;
+      $('toggle-stations').addEventListener('click', function () { if (st.on) off(); else on(); });
+      var input = $('opacity-stations'), out = $('opacity-stations-val');
+      var upd = function () {
+        out.textContent = input.value + '%';
+        input.setAttribute('aria-valuetext', input.value + '% visible');
+        st.markers.forEach(function (m) { m.setOpacity(opac()); });
+      };
+      input.addEventListener('input', upd);
+      upd();
+      state.map.on('moveend', function () {
+        if (!st.on) return;
+        clearTimeout(st.moveTimer);
+        st.moveTimer = setTimeout(refresh, MOVE_WAIT_MS);
+      });
+      window.addEventListener('online', function () { if (st.on) refresh(); });
+      window.addEventListener('offline', function () { if (st.on) refresh(); });
+      var prev = sheetCloseHooks['sheet-weather'];
+      sheetCloseHooks['sheet-weather'] = function () {
+        if (prev) prev();
+        if (st.on) $('btn-weather').classList.add('is-on');
+      };
+    }
+
+    return { init: init, on: on, off: off, refresh: refresh, visibleIds: visibleIds, state: st, API: API, MIN_ZOOM: MIN_ZOOM };
+  })();
+  ReadyMap.stations = Stations;
 
   // ---------------------------------------------------------------------------
   // 15. Startup
@@ -4632,6 +5289,7 @@
     try { LocalWx.init(); } catch (e) { /* local weather card is optional */ }
     try { WxChip.init(); } catch (e) { /* weather chip is optional */ }
     try { SpotWx.init(); } catch (e) { /* spot weather is optional */ }
+    try { Stations.init(); } catch (e) { /* stations layer is optional */ }
     updateLayoutVars();
     $('about-example').textContent = buildSpotUrl(40.7608, -111.891, 'Meeting spot', 15);
     registerServiceWorker();

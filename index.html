@@ -7,7 +7,7 @@
   <meta name="description" content="Ready Map: a simple map for anywhere in the world. It shows where you are, saves places, finds help nearby, and shows rain radar, clouds, disaster alerts and ocean layers.">
   <meta name="theme-color" content="#E86A17">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://tile.openstreetmap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -29,7 +29,7 @@
       <h1 class="brand-name">Ready Map</h1>
     </div>
     <div class="header-right">
-      <button type="button" id="wx-chip" class="wx-chip" aria-haspopup="dialog" aria-controls="sheet-localwx" aria-label="Weather now. Open local weather." hidden><span id="wx-chip-temp" class="wx-chip-temp"></span><span id="wx-chip-sep" class="wx-chip-sep" aria-hidden="true">·</span><span class="wx-chip-text"><span id="wx-chip-sky" class="wx-chip-sky"></span><span id="wx-chip-saved" class="wx-chip-mark" hidden>saved</span></span></button>
+      <button type="button" id="wx-chip" class="wx-chip" aria-haspopup="dialog" aria-controls="sheet-localwx" aria-label="Weather now. Open local weather." hidden><span id="wx-chip-temp" class="wx-chip-temp"></span><span id="wx-chip-sep" class="wx-chip-sep" aria-hidden="true">·</span><span class="wx-chip-text"><span id="wx-chip-sky" class="wx-chip-sky"></span><span class="wx-chip-marks"><span id="wx-chip-src" class="wx-chip-mark wx-chip-src" hidden></span><span id="wx-chip-saved" class="wx-chip-mark" hidden>saved</span></span></span></button>
       <p id="net-status" class="net-badge net-online" role="status">Online</p>
     </div>
   </header>
@@ -100,6 +100,7 @@
         <p id="spotwx-status" class="hint" role="status" aria-live="polite" hidden></p>
         <dl id="spotwx-facts" class="lw-facts spotwx-facts" hidden></dl>
         <p id="spotwx-updated" class="fine"></p>
+        <p id="spotwx-official" class="spotwx-official" hidden></p>
         <button type="button" id="btn-spotwx-full" class="btn" aria-haspopup="dialog" aria-controls="sheet-localwx">Full forecast</button>
       </div>
 
@@ -244,7 +245,7 @@
         <p id="radar-note" class="wx-note" role="status" aria-live="polite"></p>
         <fieldset class="seg">
           <legend>Which radar</legend>
-          <label><input type="radio" name="radar-area" value="auto" checked> Automatic: U.S. radar in the U.S., world radar elsewhere</label>
+          <label><input type="radio" name="radar-area" value="auto" checked> Automatic: the sharpest radar for the map area (U.S. NOAA, Canada and Germany national radar when zoomed in, world radar elsewhere)</label>
           <label><input type="radio" name="radar-area" value="us"> U.S. only (NOAA, more detail)</label>
           <label><input type="radio" name="radar-area" value="world"> World (RainViewer)</label>
         </fieldset>
@@ -265,6 +266,29 @@
           </div>
           <p class="legend-text">Light rain (blue, green) → heavy rain (yellow, orange) → very heavy rain or hail (red, purple).</p>
           <img id="legend-radar" class="legend-img" alt="Radar color key from NOAA, in dBZ (rain strength)" loading="lazy" hidden>
+        </details>
+      </div>
+
+      <!-- Weather stations (1.3.0) -->
+      <div class="wx-layer" id="wx-stations">
+        <div class="wx-row">
+          <button type="button" id="toggle-stations" class="toggle" role="switch" aria-checked="false">
+            <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">Weather stations (World, airports)</span>
+          </button>
+        </div>
+        <p class="wx-time">Data from: <span id="time-stations">Off</span></p>
+        <p id="stations-note" class="wx-note" role="status" aria-live="polite"></p>
+        <p class="hint">Live temperature from airport weather stations. Shows when you zoom in close (zoom level 7 or closer). Tap a dot for wind, visibility and the time of the reading.</p>
+        <div class="wx-controls">
+          <label for="opacity-stations">Stations see-through level</label>
+          <input id="opacity-stations" type="range" min="10" max="100" step="5" value="100" aria-describedby="opacity-stations-val">
+          <output id="opacity-stations-val" for="opacity-stations">100%</output>
+        </div>
+        <details class="legend">
+          <summary>Legend: weather stations</summary>
+          <p class="legend-text"><span class="stn-icon stn-legend" aria-hidden="true"><span>48°</span></span> Temperature now in °F. A gray dot is an old reading (more than 2 hours).</p>
+          <p class="legend-text">Airport weather reports (METAR) from about 5,000 stations worldwide, via the Iowa Environmental Mesonet. Readings are usually 5 to 60 minutes old.</p>
         </details>
       </div>
 
@@ -624,6 +648,9 @@
               GEBCO (wms.gebco.net) for world sea depth.</li>
             <li>Weather news, only when you open it: api.weather.gov (local office, hurricane and tropical news; it gets the map center), www.weather.gov (national headlines) and GDACS (world list). Nothing about you is sent to weather.gov or GDACS.</li>
             <li>Local weather, only when you open it (then every 15 minutes while GPS is on): api.weather.gov in the U.S., Open-Meteo (api.open-meteo.com) outside the U.S. It gets that one spot. Outside the U.S. it also gets the GDACS world list. The answer is kept only in memory, never saved on the phone.</li>
+            <li>Weather stations, only when you turn them on and zoom in: the Iowa Environmental Mesonet (mesonet.agron.iastate.edu) gets the list of stations in view, never your GPS spot.</li>
+            <li>National radar, only with the radar on and zoomed in over Canada or Germany: Environment Canada (geo.weather.gc.ca) or the DWD (maps.dwd.de). They see the map area you are looking at.</li>
+            <li>Country lookup (api-bdc.io, BigDataCloud), for the spot's weather, its forecast model and its official weather service link, and for national radar near borders. It gets that one spot, rounded. The answer is kept only in memory.</li>
             <li>Google Maps or Apple Maps, only when you tap one of those links.</li>
           </ul>
         </li>
@@ -656,10 +683,14 @@
         <li>Depth lines: NOAA Office of Coast Survey electronic nautical charts (ENC). Not for navigation.</li>
         <li>Marine zones: NOAA / National Weather Service.</li>
         <li>Weather news: NOAA / National Weather Service (local offices, National Hurricane Center, Central Pacific Hurricane Center) and GDACS.</li>
-        <li>Local weather: NOAA / National Weather Service (api.weather.gov), public domain. Outside the U.S.: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather data by Open-Meteo.com</a>, CC BY 4.0 (free for non-commercial use).</li>
+        <li>Local weather: NOAA / National Weather Service (api.weather.gov), public domain. Outside the U.S.: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather data by Open-Meteo.com</a>, CC BY 4.0 (free for non-commercial use). Sharper regional models by name through Open-Meteo (NOAA HRRR, Environment Canada HRDPS, UK Met Office UKV, DWD ICON-D2, Météo-France AROME, MeteoSwiss, KNMI, DMI, ItaliaMeteo, MET Norway, JMA).</li>
+        <li>Weather stations: airport reports (METAR/ASOS/AWOS) via the <a href="https://mesonet.agron.iastate.edu/" target="_blank" rel="noopener noreferrer">Iowa Environmental Mesonet</a>, Iowa State University.</li>
+        <li>Canada radar: <a href="https://eccc-msc.github.io/open-data/licence/readme_en/" target="_blank" rel="noopener noreferrer">Environment and Climate Change Canada</a> (MSC GeoMet), Open Government Licence - Canada.</li>
+        <li>Germany radar: <a href="https://www.dwd.de/" target="_blank" rel="noopener noreferrer">Deutscher Wetterdienst</a> (RADOLAN RY), CC BY 4.0.</li>
+        <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.2.1</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.3.0</span>. In an emergency, call 911.</p>
     </div>
   </section>
 
