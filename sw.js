@@ -17,11 +17,13 @@
  *   (world radar), and the Weather news feeds (api.weather.gov, www.weather.gov, www.gdacs.org).
  *   The Local weather card (api.weather.gov, api.open-meteo.com) is never cached here either:
  *   its last result is kept only in page memory.
+ *   1.4.1 visitor counter (gc.zgo.at/count.js and readymap.goatcounter.com) is never cached or
+ *   intercepted here; offline or blocked, the counter simply does nothing.
  *   Only same-origin app files and TILE_HOST tiles are ever cached.
  */
 'use strict';
 
-var VERSION = '1.4.0';
+var VERSION = '1.4.1';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js

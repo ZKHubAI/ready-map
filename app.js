@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.0';
+  var VERSION = '1.4.1';
   // Base map tile provider. The OSM tile policy forbids bulk download / prefetch features
   // (https://operations.osmfoundation.org/policies/tiles/), so allowPrefetch is false: the app
   // only keeps tiles the user has actually looked at (the service worker caches them, max 500).
@@ -5721,6 +5721,78 @@
     window.addEventListener('resize', updateLayoutVars);
   }
 
+  // 1.4.1 Visitor counter (GoatCounter, loaded by a <script> tag at the end of index.html).
+  // Anonymous only: the page path without the ?lat=..&lon=.. query, and a few fixed event names.
+  // Never sends coordinates, tapped spots, labels or any other personal data. If the script is
+  // blocked or the phone is offline, every call here quietly does nothing.
+  var Analytics = (function () {
+    var EVENTS = ['start-gps', 'weather-opened', 'compass-opened', 'measure-distance', 'share-used'];
+    var sentView = false;
+    function gc() {
+      var g = window.goatcounter;
+      return (g && typeof g.count === 'function' && typeof g.get_data === 'function') ? g : null;
+    }
+    // Wrap count.js data so no query string, referrer path or real title ever leaves the phone.
+    function guard(g) {
+      if (g._rmGuarded) return;
+      var orig = g.get_data;
+      g.get_data = function (vars) {
+        vars = vars || {};
+        var d = orig.call(g, vars);
+        d.q = '';
+        d.p = vars.event ? String(vars.path || '') : location.pathname;
+        d.t = vars.event ? String(vars.path || '') : 'Ready Map';
+        var r = '';
+        try { if (d.r) r = new URL(d.r).origin; } catch (e) { r = ''; }
+        if (r === location.origin) r = '';
+        d.r = vars.event ? '' : r;
+        return d;
+      };
+      g._rmGuarded = true;
+    }
+    function pageView() {
+      try {
+        var g = gc();
+        if (!g || sentView) return;
+        guard(g);
+        sentView = true;
+        g.count({ path: location.pathname });
+      } catch (e) { /* counter blocked or broken: ignore */ }
+    }
+    function event(name) {
+      try {
+        if (EVENTS.indexOf(name) < 0) return;
+        var g = gc();
+        if (!g) return;
+        guard(g);
+        g.count({ path: name, event: true });
+      } catch (e) { /* ignore */ }
+    }
+    function init() {
+      try {
+        pageView();
+        var s = document.querySelector('script[data-goatcounter]');
+        if (s) s.addEventListener('load', pageView);
+      } catch (e) { /* ignore */ }
+    }
+    return { init: init, event: event, EVENTS: EVENTS };
+  })();
+  ReadyMap.analytics = Analytics;
+
+  function bindAnalytics() {
+    // Runs after the button's own click handler, so `when` sees the new state.
+    function on(id, name, when) {
+      var el = $(id);
+      if (el) el.addEventListener('click', function () { if (!when || when()) Analytics.event(name); });
+    }
+    on('btn-locate', 'start-gps', function () { return state.watchId !== null; });
+    on('btn-weather', 'weather-opened', function () { return !$('sheet-weather').hidden; });
+    on('btn-compass', 'compass-opened');
+    on('btn-measure', 'measure-distance');
+    on('btn-share', 'share-used');
+    on('btn-share-location', 'share-used');
+  }
+
   function applyUrlParams() {
     var res = parseParams(location.search);
     if (!res.present) return;
@@ -5735,6 +5807,7 @@
   function start() {
     $('app-version').textContent = VERSION;
     bindUi();
+    try { bindAnalytics(); Analytics.init(); } catch (e) { /* visitor counter is optional */ }
     initSheets();
     if (typeof L === 'undefined') {
       setStatus('The map could not load. Please reload the page.', 'error');

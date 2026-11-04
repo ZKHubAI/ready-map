@@ -6,9 +6,9 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.4.0.
+Version 1.4.1.
 
-Plain HTML, CSS and JavaScript. No build step, no npm, no CDN, no tracking. Leaflet 1.9.4 is
+Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
 
 ## Files
@@ -59,6 +59,17 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.4.1
+
+- **Anonymous visitor counter** ([GoatCounter](https://www.goatcounter.com/), no cookies). The site code
+  (`readymap`) is in one spot: the `data-goatcounter` script tag at the end of `index.html` (also update the
+  `readymap.goatcounter.com` host in the CSP there if you change it). Dashboard: <https://readymap.goatcounter.com/>.
+- It sends one page view (the page path only; the `?lat=..&lon=..` link query, title and referrer path are
+  stripped in `app.js`) and these event names, nothing else: `start-gps`, `weather-opened`,
+  `compass-opened`, `measure-distance`, `share-used`. Never coordinates, tapped spots or labels.
+- If the counter is blocked or the phone is offline, nothing changes. The service worker never caches
+  or intercepts the counter. About and privacy says so in one line.
 
 ## Changes in 1.4.0
 
