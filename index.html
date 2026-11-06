@@ -7,13 +7,14 @@
   <meta name="description" content="Ready Map: a simple map for anywhere in the world. It shows where you are, saves places, finds help nearby, and shows rain radar, clouds, disaster alerts and ocean layers.">
   <meta name="theme-color" content="#E86A17">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://gc.zgo.at; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://readymap.goatcounter.com https://tile.openstreetmap.org https://server.arcgisonline.com https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://readymap.goatcounter.com https://tile.openstreetmap.org https://server.arcgisonline.com https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://photon.komoot.io https://nominatim.openstreetmap.org https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://gc.zgo.at; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://photon.komoot.io https://nominatim.openstreetmap.org https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io; worker-src 'self'; font-src 'self' https://tiles.openfreemap.org; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Ready Map">
   <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="./vendor/maplibre/maplibre-gl.css">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -108,7 +109,7 @@
         <label><input type="radio" name="map-names" value="readable" checked> Easy to read (Beijing, Tokyo, Seoul)</label>
         <label><input type="radio" name="map-names" value="local"> Local names (北京, 東京, 서울)</label>
       </fieldset>
-      <p class="hint">Easy to read uses names most people can read. Local names shows each place in its own language. Warnings and weather text are not changed.</p>
+      <p class="hint">Easy to read keeps detailed streets and adds Latin/English names where available, sometimes beside local names. Local names uses the original map. The styles differ slightly. Warnings and weather text are not changed.</p>
     </div>
   </section>
 
@@ -252,7 +253,7 @@
       <button type="button" class="sheet-close" data-close aria-label="Close offline map">Close</button>
     </div>
     <div class="sheet-body">
-      <p id="save-info">The map keeps the parts you have already looked at (up to 500 map pieces). They still show when you have no signal.</p>
+      <p id="save-info">The map keeps the parts you have already looked at (up to 500 map pieces). Saved pieces may show without signal; coverage can be incomplete.</p>
       <h3>To keep an area</h3>
       <ol class="steps">
         <li>While you have signal, move the map to the area.</li>
@@ -262,7 +263,7 @@
       <p id="save-count" class="sheet-status" role="status" aria-live="polite"></p>
       <button type="button" id="btn-save-clear" class="btn btn-wide">Clear saved map</button>
       <p id="save-status" class="sheet-status" role="status" aria-live="polite"></p>
-      <p class="fine">Map pieces come from Esri (Easy to read names) or OpenStreetMap (Local names). Their rules do not allow downloading whole areas ahead of time, so the app only keeps what you view. Old pieces are removed first when it is full. Weather and ocean layers are never saved.</p>
+      <p class="fine">Map pieces come from OpenFreeMap (Easy to read names) or OpenStreetMap (Local names). This app only keeps what you view; it never downloads whole areas ahead of time. Old pieces are removed first when it is full. Weather and ocean layers are never saved.</p>
     </div>
   </section>
 
@@ -682,7 +683,7 @@
           "Local weather" sends one spot (your GPS spot, or the spot you tapped, or the map center) to the National Weather Service (api.weather.gov) in the U.S., or to Open-Meteo (api.open-meteo.com) outside the U.S.</li>
         <li>The app only talks to these services:
           <ul>
-            <li>Esri (server.arcgisonline.com), for map pictures (tiles) with easy to read names, or OpenStreetMap (tile.openstreetmap.org) if you pick Local names in More tools.</li>
+            <li>OpenFreeMap (tiles.openfreemap.org), for detailed map tiles, names, fonts and symbols, or OpenStreetMap (tile.openstreetmap.org) if you pick Local names in More tools.</li>
             <li>Overpass API, and as backups Photon (komoot) and Nominatim (OpenStreetMap), only when you tap a Find nearby button. Results are kept on this device for 24 hours.</li>
             <li>NOAA / National Weather Service, only when you turn on a weather layer.</li>
             <li>NOAA ocean services, only when you turn on an Ocean layer: NOAA nowCOAST (nowcoast.noaa.gov) for currents and sea temperature, NOAA Office of Coast Survey charts (gis.charttools.noaa.gov) for depth lines, and the National Weather Service map server (mapservices.weather.noaa.gov) for marine zones. They see the map area you are looking at.</li>
@@ -711,13 +712,14 @@
       <p><code id="about-example" class="break">./?lat=40.7608&amp;lon=-111.891&amp;label=Meeting%20spot&amp;zoom=15</code></p>
 
       <h3>Offline map</h3>
-      <p>The map keeps the parts you have already looked at (up to 500 map pieces), so they still show without signal. To keep an area, look around it now at the zoom levels you need. The app does not download areas ahead of time. To free up space:</p>
+      <p>The map keeps the parts you have already looked at (up to 500 map pieces), which may help without signal. Coverage can be incomplete, especially if names or map symbols are missing from the cache. To keep an area, look around it now at the zoom levels you need. The app does not download areas ahead of time. To free up space:</p>
       <button type="button" id="btn-clear-map" class="btn">Clear saved map</button>
       <p id="clear-status" class="sheet-status" role="status" aria-live="polite"></p>
 
       <h3>Credits</h3>
       <ul>
-        <li>Easy to read map: <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> World Street Map. Sources: Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCan, Esri Japan, METI, Esri China (Hong Kong), Esri Korea, Esri (Thailand), NGCC, OpenStreetMap contributors, and the GIS User Community.</li>
+        <li>Easy to read map: <a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> Bright, with OpenStreetMap data and OpenMapTiles. Names may be bilingual; not every name has a translation.</li>
+        <li>Vector rendering: MapLibre GL JS 5.24.0 (<a href="./vendor/maplibre/LICENSE.txt">license</a>) and MapLibre GL Leaflet 0.1.4 (<a href="./vendor/maplibre-leaflet/LICENSE">license</a>), vendored locally.</li>
         <li>Local names map and map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>, ODbL license.</li>
         <li>Map library: <a href="https://leafletjs.com/" target="_blank" rel="noopener noreferrer">Leaflet</a> 1.9.4, BSD 2-Clause license (<a href="./vendor/leaflet/LICENSE" target="_blank" rel="noopener">license text</a>).</li>
         <li>Weather: NOAA / National Weather Service (nowCOAST and api.weather.gov), public domain.</li>
@@ -738,13 +740,15 @@
         <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.4.3</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.4.4</span>. In an emergency, call 911.</p>
     </div>
   </section>
 
   <textarea id="copy-fallback" class="visually-hidden" aria-hidden="true" tabindex="-1" readonly></textarea>
 
   <script src="./vendor/leaflet/leaflet.js"></script>
+  <script src="./vendor/maplibre/maplibre-gl-csp.js"></script>
+  <script src="./vendor/maplibre-leaflet/leaflet-maplibre-gl.js"></script>
   <script src="./app.js"></script>
   <!-- Visitor counter (1.4.1): GoatCounter, anonymous, no cookies. To change the site code, edit
        "readymap" here AND the readymap.goatcounter.com host in the Content-Security-Policy above.

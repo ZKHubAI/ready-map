@@ -23,21 +23,13 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.3';
-  // Base maps (1.4.3). Two choices for the place names on the map:
-  // - 'readable' (default): Esri World Street Map. Place names in a script most people can read
-  //   (Beijing, Tokyo, Seoul instead of only 北京市 / 東京都 / 서울). No key needed. Note the
-  //   z/y/x order in its URL.
-  // - 'local': OpenStreetMap standard tiles, which write each place in its own local language.
-  // Neither tile policy allows bulk download / prefetch (OSM: https://operations.osmfoundation.org/policies/tiles/),
-  // so allowPrefetch is false: the app only keeps tiles the user has actually looked at (the
-  // service worker caches them, max 500 shared by both maps). A new provider also needs its host
-  // added to sw.js (TILE_HOSTS) and to the CSP in index.html.
+  var VERSION = '1.4.4';
+  // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
+  // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
     readable: {
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
-      // Short on the map (phones); the full source list is in About → Credits.
-      attribution: 'Map &copy; <a href="https://www.esri.com/">Esri</a> and sources (HERE, Garmin, USGS, NGCC and others, see About), &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
+      style: 'https://tiles.openfreemap.org/styles/bright',
+      attribution: '<a href="https://openfreemap.org/">OpenFreeMap</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a>, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
       maxZoom: 19,
       allowPrefetch: false
     },
@@ -879,15 +871,40 @@
 
   function makeBaseLayer(kind) {
     var p = BASEMAPS[kind];
+    if (p.style && (typeof maplibregl === 'undefined' || typeof L.maplibreGL !== 'function')) {
+      var raster = makeBaseLayer('local');
+      raster._rmFallback = true;
+      return raster;
+    }
+    if (p.style) {
+      maplibregl.setWorkerUrl(new URL('./vendor/maplibre/maplibre-gl-csp-worker.js', document.baseURI).href);
+      // Keep Leaflet in charge of interactions and all weather/marker panes. No runtime CDN.
+      return L.maplibreGL({ style: p.style, interactive: false, pane: 'tilePane',
+        attributionControl: { customAttribution: p.attribution },
+        renderWorldCopies: true, maxZoom: 19, refreshExpiredTiles: true,
+        cancelPendingTileRequestsWhileZooming: true });
+    }
     return L.tileLayer(p.url, {
-      maxZoom: p.maxZoom,
-      attribution: p.attribution,
-      updateWhenIdle: true,
-      keepBuffer: 1,
-      // CORS tiles (OSM and Esri send Access-Control-Allow-Origin: *) so the service worker gets
-      // readable responses instead of opaque ones (opaque ones waste storage quota).
-      crossOrigin: 'anonymous'
+      maxZoom: p.maxZoom, attribution: p.attribution,
+      updateWhenIdle: true, keepBuffer: 1, crossOrigin: 'anonymous'
     });
+  }
+
+  // No WebGL, lost context, or unavailable vector service: use the original detailed map.
+  // Do not overwrite the saved preference, so the next visit can retry readable labels.
+  function fallbackBase(layer) {
+    if (layers.base !== layer) return;
+    // A constructor can fail before the bridge finishes onAdd; make removal safe then too.
+    if (layer.getMaplibreMap && !layer.getMaplibreMap()) {
+      layer.onRemove = function () { if (this._container) L.DomUtil.remove(this._container); };
+    }
+    state.map.removeLayer(layer);
+    layers.base = makeBaseLayer('local');
+    layers.base._rmKind = 'readable';
+    layers.base._rmFallback = true;
+    layers.base.addTo(state.map);
+    layers.base.bringToBack();
+    setStatus('Readable map unavailable. Showing the original map with local names.', 'warn');
   }
 
   /** Switch the base map. save: remember the choice on this device. */
@@ -903,8 +920,19 @@
     if (!layers.base) {
       layers.base = makeBaseLayer(kind);
       layers.base._rmKind = kind;
-      layers.base.addTo(state.map);
-      layers.base.bringToBack();
+      var base = layers.base;
+      try {
+        base.addTo(state.map);
+        if (base.bringToBack) base.bringToBack();
+        if (base._rmFallback) setStatus('Readable map unavailable. Showing the original map with local names.', 'warn');
+        if (base.getMaplibreMap) {
+          var gl = base.getMaplibreMap();
+          var timer = setTimeout(function () { fallbackBase(base); }, 25000);
+          gl.once('load', function () { clearTimeout(timer); });
+          base.once('remove', function () { clearTimeout(timer); });
+          gl.getCanvas().addEventListener('webglcontextlost', function () { fallbackBase(base); });
+        }
+      } catch (e) { fallbackBase(base); }
     }
     var radios = document.querySelectorAll('input[name="map-names"]');
     Array.prototype.forEach.call(radios, function (r) { r.checked = r.value === kind; });

@@ -1,6 +1,6 @@
 /* Ready Map service worker.
  * - App shell: precached, cache-first, versioned cache; old versions deleted on activate.
- * - Base map tiles (Esri World Street Map and OSM, see TILE_HOSTS): cache-first from a separate tile cache, only tiles the user actually viewed,
+ * - Base map tiles (OpenFreeMap and OSM, see TILE_HOSTS): cache-first from a separate tile cache, only tiles the user actually viewed,
  *   bounded to MAX_TILES (oldest removed first). There is no prefetch: the tile policies
  *   forbids it. The old 1.0.0 "Save this area" cache (ready-map-saved-v1) is deleted on activate.
  * - Everything else (Overpass, NOAA/NWS weather, RainViewer, map links) is NOT handled here:
@@ -23,16 +23,16 @@
  */
 'use strict';
 
-var VERSION = '1.4.3';
+var VERSION = '1.4.4';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js
 var TILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // refresh viewed tiles after a week when online
-// Base map tile hosts (1.4.3: Esri for easy-to-read names, OSM for local names). For each
+// Base map tile hosts (1.4.4: OpenFreeMap for detailed readable names, OSM for local names). For each
 // host only the listed path prefix is cached, so other images from that host never are.
 var TILE_HOSTS = {
   'tile.openstreetmap.org': '/',
-  'server.arcgisonline.com': '/ArcGIS/rest/services/World_Street_Map/MapServer/tile/'
+  'tiles.openfreemap.org': '/'
 };
 function isTile(url) {
   return Object.prototype.hasOwnProperty.call(TILE_HOSTS, url.hostname) &&
@@ -49,6 +49,10 @@ var SHELL = [
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './vendor/maplibre/maplibre-gl-csp.js',
+  './vendor/maplibre/maplibre-gl-csp-worker.js',
+  './vendor/maplibre/maplibre-gl.css',
+  './vendor/maplibre-leaflet/leaflet-maplibre-gl.js',
   './vendor/leaflet/leaflet.js',
   './vendor/leaflet/leaflet.css',
   './vendor/leaflet/LICENSE',
@@ -118,7 +122,7 @@ function handleShell(req, url) {
   });
 }
 
-var putsSinceTrim = 0;
+var tileWrites = Promise.resolve();
 
 function handleTile(event) {
   var req = event.request;
@@ -138,10 +142,10 @@ function handleTile(event) {
         if (res.ok && res.type !== 'opaque') {
           wrote = true;
           finishWrite(stamp(res.clone()).then(function (stamped) {
-            return cache.put(req.url, stamped);
-          }).then(function () {
-            putsSinceTrim++;
-            if (putsSinceTrim >= 25) { putsSinceTrim = 0; return trim(cache); }
+            tileWrites = tileWrites.catch(function () {}).then(function () {
+              return cache.put(req.url, stamped).then(function () { return trim(cache); });
+            });
+            return tileWrites;
           }).catch(function () { /* storage full: ignore */ }));
         }
         return res;

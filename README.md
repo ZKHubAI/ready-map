@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.4.3.
+Version 1.4.4.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -59,6 +59,25 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.4.4
+
+- **Detailed streets are back in Easy to read.** OpenFreeMap Bright uses OpenStreetMap
+  data, small streets and buildings, with Latin/English names where available (often bilingual).
+  It is closer to the original colorful street map, but is not the exact OSM Carto style.
+- **Local names** still shows the exact original OpenStreetMap raster map. The same
+  `readyMap.mapNames.v1` preference is retained. No automatic translation of official warnings.
+- Esri is no longer used. If WebGL or the readable map service is unavailable, the app
+  falls back to original OSM for this visit without replacing the saved choice.
+- MapLibre GL JS **5.24.0** (CSP main + same-origin worker) and its Leaflet bridge **0.1.4**
+  are pinned in `vendor/`, along with their licenses. No build step or runtime CDN.
+  Leaflet still handles interactions, pins, measuring, radar and other weather/ocean overlays.
+- OpenFreeMap resources are cached only as viewed, sharing the **500-item** cap with OSM.
+  Styles, source metadata, glyphs and sprites count toward that cap too; no area downloads
+  or prefetch. Browser requests keep the browser User-Agent (JavaScript cannot reliably set it);
+  the normal referrer identifies Ready Map. This is not an offline download facility.
+- Tradeoffs: roughly 1.5 MB additional uncompressed renderer/worker/CSS; WebGL required
+  for readable maps, bilingual names can take more space, and some places lack Latin labels.
 
 ## Changes in 1.4.3
 
@@ -122,7 +141,7 @@ the same kind of link for the current point.
 
 The app only contacts:
 
-- `server.arcgisonline.com` (Esri World Street Map, the default "Easy to read" map) or, if you pick
+- `tiles.openfreemap.org` (OpenFreeMap Bright vector map, names, glyphs and sprites) or, if you pick
   **Local names**, `tile.openstreetmap.org` for map tiles. Only tiles you actually view are loaded; the service
   worker keeps them (max 500, oldest dropped first) so they show offline.
 - Find nearby (since 1.3.1 it searches as soon as you tap Hospital, Shelter, Police, Fire station
@@ -302,14 +321,14 @@ links go to the NWS point forecast). Over open sea there is no link.
 
 ## Offline map (no area download)
 
-The [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/) (and Esri's terms) do not allow bulk
+The [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/) (and [OpenFreeMap terms](https://openfreemap.org/tos/)) do not allow bulk
 download or prefetch features, so there is no "download this area" button. **More tools → Offline
 map** (`#btn-save-area`) explains how it works: the map keeps the tiles you have already looked at
 (up to 500), so to keep an area, look around it at the zoom levels you need while you have signal.
 The panel shows how many tiles are kept and has **Clear saved map**.
 
-The tile sources are the `BASEMAPS` object at the top of `app.js` (`readable` = Esri, `local` = OSM;
-each has `url`, `attribution`, `maxZoom`, `allowPrefetch: false`; `TILE_PROVIDER` is the active one).
+The tile sources are the `BASEMAPS` object at the top of `app.js` (`readable` = OpenFreeMap Bright, `local` = OSM;
+each has `style` (vector) or `url` (raster), `attribution`, `maxZoom`, `allowPrefetch: false`; `TILE_PROVIDER` is the active one).
 A new provider also needs its host in `TILE_HOSTS` in `sw.js` and the CSP in
 `index.html`). Map mistakes can be reported at <https://www.openstreetmap.org/fixthemap>
 (linked in About).
