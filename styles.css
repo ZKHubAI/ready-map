@@ -572,3 +572,41 @@ body.is-measuring .point-card { display: none; }
 .map-loop[hidden] { display: none; }
 .map-loop-time { font-weight: 600; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
 .map-loop-time:empty { display: none; }
+
+
+/* 1.4.5 Full map: the same map and emergency actions, with less chrome. */
+.map-full-toggle {
+  position: absolute; top: calc(10px + var(--safe-top));
+  right: calc(10px + var(--safe-right)); z-index: 1050;
+  min-height: var(--tap); padding: 4px 14px; border-radius: 999px;
+  background: #FFFFFF; color: var(--ink); border: 2px solid var(--ink);
+  font: inherit; font-weight: 800; font-size: 0.95rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25); cursor: pointer;
+}
+.map-loop { top: calc(68px + var(--safe-top)); }
+body.full-map .app-header,
+body.full-map .chips,
+body.full-map .point-card,
+body.full-map .skip-link { display: none; }
+body.full-map .map-wrap { position: fixed; inset: 0; }
+body.full-map .leaflet-top { top: var(--safe-top); }
+body.full-map .leaflet-left { left: var(--safe-left); }
+body.full-map .leaflet-bottom { bottom: var(--safe-bottom); }
+body.full-map .emergency {
+  position: fixed; left: auto; right: calc(10px + var(--safe-right));
+  bottom: calc(28px + var(--safe-bottom));
+  width: auto; max-width: calc(100% - 20px - var(--safe-left) - var(--safe-right));
+  padding: 0; gap: 6px; border: 0; background: transparent;
+}
+body.full-map .emergency .btn {
+  flex: 0 1 auto; min-width: 0; min-height: 44px;
+  padding: 6px 10px; font-size: 0.85rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+/* Keep status, errors and share fallbacks visible without shrinking the map. */
+body.full-map .status-banner:not([hidden]) {
+  position: fixed; top: calc(130px + var(--safe-top));
+  left: calc(10px + var(--safe-left)); right: calc(10px + var(--safe-right));
+  z-index: 1050; max-height: 30%; overflow-y: auto; border-radius: 12px;
+}
+body.full-map .measure-panel { bottom: calc(84px + var(--safe-bottom)); }

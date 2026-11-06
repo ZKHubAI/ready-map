@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.4';
+  var VERSION = '1.4.5';
   // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
   // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
@@ -797,8 +797,49 @@
 
   function updateLayoutVars() {
     var footer = document.querySelector('.emergency');
-    if (footer) document.documentElement.style.setProperty('--footer-h', footer.offsetHeight + 'px');
+    if (footer) {
+      var height = document.body.classList.contains('full-map')
+        ? window.innerHeight - footer.getBoundingClientRect().top : footer.offsetHeight;
+      document.documentElement.style.setProperty('--footer-h', height + 'px');
+    }
   }
+
+  // 1.4.5 Full map: presentation only; GPS, layers and radar keep their state.
+  var FULL_MAP_KEY = 'readyMap.fullMap.v1';
+  var fullMap = false;
+
+  function setFullMap(enabled, persist) {
+    fullMap = enabled === true;
+    document.body.classList.toggle('full-map', fullMap);
+    var button = $('btn-full-map');
+    button.textContent = fullMap ? 'Restore controls' : 'Full map';
+    button.setAttribute('aria-pressed', String(fullMap));
+    button.setAttribute('aria-label', fullMap ? 'Restore map controls' : 'Full map. Hide map controls');
+    if (persist) {
+      try { localStorage.setItem(FULL_MAP_KEY, String(fullMap)); } catch (e) { /* storage may be unavailable */ }
+    }
+    // Never leave keyboard focus inside the now-hidden chrome.
+    var active = document.activeElement;
+    if (fullMap && active && active.closest && active.closest('.app-header, .chips, .point-card, .skip-link')) button.focus();
+    updateLayoutVars();
+    requestAnimationFrame(function () {
+      if (state.map) state.map.invalidateSize({ pan: false });
+    });
+  }
+
+  function initFullMap() {
+    var saved = false;
+    try { saved = localStorage.getItem(FULL_MAP_KEY) === 'true'; } catch (e) { /* default off */ }
+    $('btn-full-map').addEventListener('click', function () { setFullMap(!fullMap, true); });
+    setFullMap(saved, false);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && fullMap && !topSheet()) {
+        setFullMap(false, true);
+        $('btn-full-map').focus();
+      }
+    });
+  }
+  ReadyMap.fullMap = { get: function () { return fullMap; }, set: function (enabled) { setFullMap(enabled, true); } };
 
   // ---------------------------------------------------------------------------
   // State
@@ -5925,6 +5966,7 @@
       return;
     }
     initMap();
+    initFullMap();
     state.places = loadPlaces();
     drawPlaces();
     applyUrlParams();

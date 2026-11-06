@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.4.4.
+Version 1.4.5.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -59,6 +59,21 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.4.5
+
+- **Full map** on the map hides the header, tool row and location card so the map
+  fills the viewport. The floating **Restore controls** button (or Escape) restores them.
+- Red **Call 911** and orange **Share my location** remain as compact floating actions.
+  Status/error messages and share fallbacks remain visible as overlays; attribution stays visible.
+- Saved locally as `readyMap.fullMap.v1` (`true` / `false`), default off. Storage failures
+  do not prevent toggling. GPS, place names, map tiles, radar loop and warning wording are unchanged.
+- The mode fills the web page viewport, not the phone's system/browser bars.
+- Controller regression checks: `node tests/full-map.mjs`. The existing browser smoke
+  test now checks 390px full-map sizing, restore, persistence, emergency colors/tap targets,
+  and radar controls. It writes `/workspace/ready-map-v145-chrome.png` and
+  `/workspace/ready-map-v145-fullmap.png` (override with `READY_MAP_CHROME_SHOT` and
+  `READY_MAP_FULL_SHOT` for separate local/live captures).
 
 ## Changes in 1.4.4
 

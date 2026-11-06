@@ -1,7 +1,7 @@
 // Dev-only smoke test (not part of the app). Needs Chrome and a server running the app.
 // usage: node tests/smoke.mjs http://127.0.0.1:8000/
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,33 @@ await send("Runtime.enable"); await send("Page.enable");
 await send("Emulation.setDeviceMetricsOverride", {width:390,height:844,deviceScaleFactor:1,mobile:true});
 await send("Page.navigate", { url: base + "index.html?lat=39.7456&lon=-97.0892&zoom=8&label=Test" });
 await sleep(3000);
+
+// 1.4.5 Full map at a 390px mobile viewport. Never activate emergency actions.
+assert(await ev("ReadyMap.version==='1.4.5'"), 'app reports 1.4.5');
+assert(await ev("!ReadyMap.fullMap.get() && !document.body.classList.contains('full-map')"), 'full map defaults off');
+const shot = async (path) => {
+  const result = await send('Page.captureScreenshot', {format:'png', captureBeyondViewport:false});
+  assert(typeof result.result?.data === 'string', 'screenshot captured');
+  writeFileSync(path, Buffer.from(result.result.data, 'base64'));
+};
+await shot(process.env.READY_MAP_CHROME_SHOT || '/workspace/ready-map-v145-chrome.png');
+const mapBefore = await ev("ReadyMap.map.getSize().y");
+await $click('#btn-full-map'); await sleep(500);
+assert(await ev("ReadyMap.fullMap.get() && localStorage.getItem('readyMap.fullMap.v1')==='true'"), 'full map enabled and saved');
+assert(await ev("['.app-header','.chips','.point-card'].every(s=>getComputedStyle(document.querySelector(s)).display==='none')"), 'chrome hidden');
+assert(await ev("(()=>{const r=document.querySelector('#map').getBoundingClientRect();return r.top===0 && r.left===0 && r.width===innerWidth && Math.abs(r.height-innerHeight)<2 && ReadyMap.map.getSize().y===Math.round(r.height)})()"), 'map and Leaflet fill viewport');
+assert(await ev(`ReadyMap.map.getSize().y > ${mapBefore}`), 'map grows');
+assert(await ev("(()=>{const b=document.querySelector('#btn-full-map');return b.textContent==='Restore controls' && b.getAttribute('aria-pressed')==='true' && b.getBoundingClientRect().width>0})()"), 'floating restore available');
+assert(await ev("(()=>{const call=document.querySelector('#btn-call'),share=document.querySelector('#btn-share-location');return call.getAttribute('href')==='tel:911' && [call,share].every(b=>{const r=b.getBoundingClientRect();return r.width>0 && r.height>=44 && r.height<56 && r.left>=0 && r.right<=innerWidth && r.bottom<=innerHeight})})()"), 'compact emergency actions remain in viewport');
+assert(await ev("getComputedStyle(document.querySelector('#btn-call')).backgroundColor===getComputedStyle(document.documentElement).getPropertyValue('--danger').trim() || getComputedStyle(document.querySelector('#btn-call')).backgroundColor==='rgb(159, 18, 57)'"), 'call remains red');
+assert(await ev("getComputedStyle(document.querySelector('#btn-share-location')).backgroundColor==='rgb(232, 106, 23)'"), 'share remains orange');
+await shot(process.env.READY_MAP_FULL_SHOT || '/workspace/ready-map-v145-fullmap.png');
+await send('Page.reload'); await sleep(3000);
+assert(await ev("ReadyMap.fullMap.get() && document.querySelector('#map').getBoundingClientRect().top===0"), 'full map survives reload');
+await $click('#btn-full-map'); await sleep(500);
+assert(await ev("!ReadyMap.fullMap.get() && localStorage.getItem('readyMap.fullMap.v1')==='false' && document.querySelector('.app-header').getBoundingClientRect().height>0"), 'restore returns chrome and saves off');
+await send('Page.reload'); await sleep(3000);
+assert(await ev("!ReadyMap.fullMap.get()"), 'off survives reload');
 
 // Toolbar fits at 390px (no horizontal scroll); More tools menu opens
 log("chips overflow:", await ev("(()=>{const n=document.querySelector('.chips');return n.scrollWidth>n.clientWidth})()"));
@@ -103,6 +130,16 @@ log("map button paused loop:", await ev("!ReadyMap.weather.state.radar.playing")
 await $click("#btn-map-loop");
 assert(await ev("ReadyMap.weather.state.radar.playing"), "map loop button resumes");
 log("map button played loop:", await ev("ReadyMap.weather.state.radar.playing"), "| weather button:", await text("#btn-radar-play"));
+
+// Full map must not stop or replace the existing radar loop.
+await $click('#btn-full-map'); await sleep(500);
+assert(await ev("ReadyMap.weather.state.radar.playing"), 'full map preserves playing radar');
+assert(await ev("(()=>{const a=document.querySelector('#btn-full-map').getBoundingClientRect(),b=document.querySelector('#btn-map-loop').getBoundingClientRect();return a.bottom<=b.top})()"), 'restore and radar controls do not overlap');
+await $click('#btn-map-loop');
+assert(await ev("!ReadyMap.weather.state.radar.playing"), 'radar pauses in full map');
+await $click('#btn-map-loop');
+await ev("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))"); await sleep(500);
+assert(await ev("!ReadyMap.fullMap.get() && ReadyMap.weather.state.radar.playing"), 'Escape restores chrome without stopping radar');
 
 // Compass on a desktop browser (no sensor)
 await $click("#btn-compass"); await sleep(4000);
