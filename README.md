@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.4.1.
+Version 1.4.2.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -59,6 +59,16 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.4.2
+
+- **Radar loop keeps playing after you close Weather.** Closing the Weather sheet (or opening a warning's
+  details) used to stop the loop. Now closing it only hides the sheet: the radar stays on the map and keeps
+  looping. Only **Pause loop** or turning radar off stops it. The loop rests while the app is in the
+  background and starts again when you come back. It also keeps going when the map switches radar source.
+- **Radar loop button on the map** (top right). It shows whenever radar is on and has loop frames.
+  Tap it to play or pause the loop without opening Weather. While it plays, it shows the frame time.
+  It stays in step with **Play loop / Pause loop** in Weather.
 
 ## Changes in 1.4.1
 

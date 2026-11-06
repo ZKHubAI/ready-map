@@ -74,8 +74,13 @@ await sleep(6000);
 log("satellite time:", await text("#time-satellite"), "|", await text("#satellite-note"));
 await $click("#btn-radar-play"); await sleep(2500);
 log("loop label:", await text("#radar-frame-time"), "| frames:", await ev("ReadyMap.weather.state.radar.frames.length"));
-await $click("#sheet-weather .sheet-close");
-log("loop stopped on close:", await ev("!ReadyMap.weather.state.radar.playing"));
+log("map loop button shown:", await ev("!document.querySelector('#btn-map-loop').hidden"));
+await $click("#sheet-weather .sheet-close"); await sleep(1500);
+log("loop still playing after close:", await ev("ReadyMap.weather.state.radar.playing"), "| map button:", await text("#map-loop-label"));
+await $click("#btn-map-loop");
+log("map button paused loop:", await ev("!ReadyMap.weather.state.radar.playing"), "| weather button:", await text("#btn-radar-play"));
+await $click("#btn-map-loop");
+log("map button played loop:", await ev("ReadyMap.weather.state.radar.playing"), "| weather button:", await text("#btn-radar-play"));
 
 // Compass on a desktop browser (no sensor)
 await $click("#btn-compass"); await sleep(4000);

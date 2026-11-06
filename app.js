@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.1';
+  var VERSION = '1.4.2';
   // Base map tile provider. The OSM tile policy forbids bulk download / prefetch features
   // (https://operations.osmfoundation.org/policies/tiles/), so allowPrefetch is false: the app
   // only keeps tiles the user has actually looked at (the service worker caches them, max 500).
@@ -2742,7 +2742,7 @@
     // back to RainViewer).
     var radar = { on: false, mode: 'noaa', layer: null, frames: [], frameLayers: [], idx: 0, timer: null,
       playing: false, lastGood: null, gen: 0, errors: 0, loads: 0, fallbackGen: -1, fallbackFlight: null,
-      area: 'auto', pick: 'noaa', moveTimer: null, nat: null };
+      area: 'auto', pick: 'noaa', moveTimer: null, nat: null, wantLoop: false };
     var sat = { on: false, kind: 'goes_longwave_imagery', layer: null, lastGood: null, gen: 0 };
     var gdacs = { on: false, layer: null, gen: 0, ctrl: null, features: [], lastGood: null, listTimer: null };
     var alerts = { on: false, layer: null, renderer: null, timer: null, lastGood: null, lastFetch: 0, gen: 0,
@@ -2924,6 +2924,9 @@
       $('time-radar').textContent = formatLocalTime(latest.date) + radarSourceText();
       $('radar-frame-time').textContent = '';
       $('btn-radar-play').disabled = frames.length < 2;
+      updateLoopUi();
+      // 1.4.2: new frames (map moved to another radar, backup radar, retry) keep a loop the user started.
+      if (radar.wantLoop && frames.length >= 2 && !document.hidden) startLoop();
       if (radar.mode === 'rainviewer' && radar.pick === 'world') {
         $('radar-note').textContent = 'World radar from RainViewer. It is less detailed when you zoom in close.';
       } else if (radar.mode === 'rainviewer') {
@@ -3004,6 +3007,7 @@
 
     function radarOff() {
       radar.on = false;
+      radar.wantLoop = false;
       radar.gen++;
       radar.fallbackFlight = null; // a late reply is ignored by its gen check
       removeRadarLayers();
@@ -3012,6 +3016,25 @@
       $('radar-note').textContent = '';
       $('radar-frame-time').textContent = '';
       $('btn-radar-play').disabled = true;
+      updateLoopUi();
+    }
+
+    /** 1.4.2 On-map loop button: shown whenever radar is on with 2+ frames, mirrors Play/Pause loop. */
+    function updateLoopUi() {
+      var b = $('btn-map-loop');
+      if (!b) return;
+      var can = radar.on && radar.frames.length >= 2;
+      b.hidden = !can;
+      b.setAttribute('aria-pressed', radar.playing ? 'true' : 'false');
+      $('map-loop-label').textContent = radar.playing ? 'Pause radar loop' : 'Play radar loop';
+      var f = radar.playing && radar.frames[radar.idx];
+      $('map-loop-time').textContent = f ? formatLocalTime(f.date) : '';
+    }
+
+    /** User Play/Pause (Weather sheet button or the on-map button). Only this and Radar off end a loop for good. */
+    function toggleLoopByUser() {
+      if (radar.playing) { radar.wantLoop = false; stopLoop(); }
+      else { radar.wantLoop = true; startLoop(); }
     }
 
     function showFrame(i) {
@@ -3020,6 +3043,7 @@
       radar.frameLayers.forEach(function (l, j) { if (l) l.setOpacity(j === i ? op : 0); });
       var f = radar.frames[i];
       $('radar-frame-time').textContent = 'Frame ' + (i + 1) + ' of ' + radar.frames.length + ': ' + formatLocalTime(f.date);
+      updateLoopUi();
     }
 
     function startLoop() {
@@ -3033,6 +3057,7 @@
         }
       });
       radar.playing = true;
+      radar.wantLoop = true;
       var b = $('btn-radar-play');
       b.textContent = 'Pause loop';
       b.setAttribute('aria-pressed', 'true');
@@ -3063,6 +3088,7 @@
       if (keep) keep.setOpacity(radarOpacity());
       radar.idx = last;
       $('radar-frame-time').textContent = '';
+      updateLoopUi();
     }
 
     // ----- Satellite -----
@@ -3426,8 +3452,7 @@
       more.textContent = 'More';
       more.setAttribute('aria-expanded', 'false');
       $('alert-sender').textContent = p.senderName ? 'From ' + p.senderName + '.' : '';
-      // The detail sheet covers the weather sheet: stop the radar loop like closing weather does.
-      stopLoop();
+      // 1.4.2: the radar loop keeps playing behind the alert detail sheet.
       openSheet('sheet-alert', opener || document.activeElement);
     }
 
@@ -3971,7 +3996,8 @@
         alerts.wholeState = e.target.checked;
         fetchAlerts();
       });
-      $('btn-radar-play').addEventListener('click', function () { if (radar.playing) stopLoop(); else startLoop(); });
+      $('btn-radar-play').addEventListener('click', toggleLoopByUser);
+      $('btn-map-loop').addEventListener('click', toggleLoopByUser);
       $('btn-alert-more').addEventListener('click', function () {
         var d = $('alert-description');
         d.hidden = !d.hidden;
@@ -4022,15 +4048,22 @@
         });
       });
 
-      sheetCloseHooks['sheet-weather'] = function () { stopLoop(); $('btn-weather').classList.toggle('is-on', radar.on || sat.on || alerts.on || gdacs.on || anyOceanOn()); };
+      // 1.4.2: closing Weather only hides the sheet. The radar overlay and its loop keep running on the map.
+      sheetCloseHooks['sheet-weather'] = function () { $('btn-weather').classList.toggle('is-on', radar.on || sat.on || alerts.on || gdacs.on || anyOceanOn()); };
       document.addEventListener('visibilitychange', function () {
         if (document.hidden) {
+          // Save battery while the app is in the background; wantLoop stays set so it resumes.
+          var keep = radar.wantLoop;
           stopLoop();
+          radar.wantLoop = keep;
           clearInterval(alerts.timer);
           alerts.timer = null;
-        } else if (alerts.on) {
-          if (Date.now() - alerts.lastFetch > ALERT_REFRESH_MS) fetchAlerts();
-          scheduleAlerts();
+        } else {
+          if (radar.wantLoop && !radar.playing) startLoop();
+          if (alerts.on) {
+            if (Date.now() - alerts.lastFetch > ALERT_REFRESH_MS) fetchAlerts();
+            scheduleAlerts();
+          }
         }
       });
     }

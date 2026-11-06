@@ -558,3 +558,17 @@ body.is-measuring .point-card { display: none; }
 .measure-icon { background: #1D4ED8; color: #fff; border: 2px solid #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.8rem; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
 .leaflet-container.is-measuring { cursor: crosshair; }
 .measure-panel[hidden], .compass-target-arrow[hidden], .compass-target[hidden] { display: none; }
+
+/* 1.4.2 On-map radar loop button (top right of the map, clear of the zoom buttons) */
+.map-loop {
+  position: absolute; top: 10px; right: calc(10px + var(--safe-right)); z-index: 1050;
+  min-height: var(--tap); padding: 4px 14px; border-radius: 999px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: #FFFFFF; color: var(--ink); border: 2px solid var(--ink);
+  font: inherit; font-weight: 800; font-size: 0.95rem; line-height: 1.15;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25); cursor: pointer;
+}
+.map-loop[aria-pressed="true"] { background: var(--ink); color: #FFFFFF; }
+.map-loop[hidden] { display: none; }
+.map-loop-time { font-weight: 600; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.map-loop-time:empty { display: none; }

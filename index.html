@@ -48,6 +48,8 @@
 
   <main class="map-wrap">
     <div id="map" role="region" aria-label="Map. Tap the map to drop a pin."></div>
+    <!-- 1.4.2 Radar loop on/off on the map: shown only when radar is on and has loop frames -->
+    <button type="button" id="btn-map-loop" class="map-loop" aria-pressed="false" hidden><span id="map-loop-label" class="map-loop-label">Play radar loop</span><span id="map-loop-time" class="map-loop-time" aria-live="off"></span></button>
     <noscript><p class="noscript">Ready Map needs JavaScript turned on.</p></noscript>
     <!-- Measure distance (1.4.0): not a modal, so the map stays tappable -->
     <section id="measure-panel" class="measure-panel" aria-labelledby="measure-title" hidden>
@@ -729,7 +731,7 @@
         <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.4.1</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.4.2</span>. In an emergency, call 911.</p>
     </div>
   </section>
 
