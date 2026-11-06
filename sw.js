@@ -1,7 +1,7 @@
 /* Ready Map service worker.
  * - App shell: precached, cache-first, versioned cache; old versions deleted on activate.
- * - OSM tiles: cache-first from a separate tile cache, only tiles the user actually viewed,
- *   bounded to MAX_TILES (oldest removed first). There is no prefetch: the OSM tile policy
+ * - Base map tiles (Esri World Street Map and OSM, see TILE_HOSTS): cache-first from a separate tile cache, only tiles the user actually viewed,
+ *   bounded to MAX_TILES (oldest removed first). There is no prefetch: the tile policies
  *   forbids it. The old 1.0.0 "Save this area" cache (ready-map-saved-v1) is deleted on activate.
  * - Everything else (Overpass, NOAA/NWS weather, RainViewer, map links) is NOT handled here:
  *   it goes straight to the network and is never cached. That includes the 1.2.0 Ocean layer
@@ -19,16 +19,25 @@
  *   its last result is kept only in page memory.
  *   1.4.1 visitor counter (gc.zgo.at/count.js and readymap.goatcounter.com) is never cached or
  *   intercepted here; offline or blocked, the counter simply does nothing.
- *   Only same-origin app files and TILE_HOST tiles are ever cached.
+ *   Only same-origin app files and TILE_HOSTS tiles are ever cached.
  */
 'use strict';
 
-var VERSION = '1.4.2';
+var VERSION = '1.4.3';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js
 var TILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // refresh viewed tiles after a week when online
-var TILE_HOST = 'tile.openstreetmap.org';
+// Base map tile hosts (1.4.3: Esri for easy-to-read names, OSM for local names). For each
+// host only the listed path prefix is cached, so other images from that host never are.
+var TILE_HOSTS = {
+  'tile.openstreetmap.org': '/',
+  'server.arcgisonline.com': '/ArcGIS/rest/services/World_Street_Map/MapServer/tile/'
+};
+function isTile(url) {
+  return Object.prototype.hasOwnProperty.call(TILE_HOSTS, url.hostname) &&
+    url.protocol === 'https:' && url.pathname.indexOf(TILE_HOSTS[url.hostname]) === 0;
+}
 
 var SHELL = [
   './',
@@ -76,7 +85,7 @@ self.addEventListener('fetch', function (event) {
   var url;
   try { url = new URL(req.url); } catch (e) { return; }
 
-  if (url.hostname === TILE_HOST) {
+  if (isTile(url)) {
     event.respondWith(handleTile(event));
     return;
   }

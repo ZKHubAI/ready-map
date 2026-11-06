@@ -23,20 +23,34 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.2';
-  // Base map tile provider. The OSM tile policy forbids bulk download / prefetch features
-  // (https://operations.osmfoundation.org/policies/tiles/), so allowPrefetch is false: the app
-  // only keeps tiles the user has actually looked at (the service worker caches them, max 500).
-  // A provider that allows offline download could be configured here later; it would also need
-  // its host added to sw.js (TILE_HOST) and to the CSP in index.html.
-  var TILE_PROVIDER = {
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
-    maxZoom: 19,
-    allowPrefetch: false
+  var VERSION = '1.4.3';
+  // Base maps (1.4.3). Two choices for the place names on the map:
+  // - 'readable' (default): Esri World Street Map. Place names in a script most people can read
+  //   (Beijing, Tokyo, Seoul instead of only 北京市 / 東京都 / 서울). No key needed. Note the
+  //   z/y/x order in its URL.
+  // - 'local': OpenStreetMap standard tiles, which write each place in its own local language.
+  // Neither tile policy allows bulk download / prefetch (OSM: https://operations.osmfoundation.org/policies/tiles/),
+  // so allowPrefetch is false: the app only keeps tiles the user has actually looked at (the
+  // service worker caches them, max 500 shared by both maps). A new provider also needs its host
+  // added to sw.js (TILE_HOSTS) and to the CSP in index.html.
+  var BASEMAPS = {
+    readable: {
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+      // Short on the map (phones); the full source list is in About → Credits.
+      attribution: 'Map &copy; <a href="https://www.esri.com/">Esri</a> and sources (HERE, Garmin, USGS, NGCC and others, see About), &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
+      maxZoom: 19,
+      allowPrefetch: false
+    },
+    local: {
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
+      maxZoom: 19,
+      allowPrefetch: false
+    }
   };
-  var TILE_URL = TILE_PROVIDER.url;
-  var OSM_ATTRIBUTION = TILE_PROVIDER.attribution;
+  var MAP_NAMES_KEY = 'readyMap.mapNames.v1';   // 'readable' | 'local'
+  var DEFAULT_MAP_NAMES = 'readable';
+  var TILE_PROVIDER = BASEMAPS[DEFAULT_MAP_NAMES]; // the active one (set again in initMap)
   var NOAA_ATTRIBUTION = 'Weather: <a href="https://www.weather.gov/">NOAA / National Weather Service</a>';
   var RAINVIEWER_ATTRIBUTION = 'Radar fallback: <a href="https://www.rainviewer.com/">RainViewer</a>';
   var NOWCOAST_OCEAN_ATTRIBUTION = 'Ocean: <a href="https://nowcoast.noaa.gov/">NOAA nowCOAST</a>';
@@ -857,6 +871,45 @@
     else state.map.setView([lat, lon], z, { animate: true });
   }
 
+  // --- Map names (1.4.3): readable international names, or local-language names ---------
+  function readMapNames() {
+    var v = lsGet(MAP_NAMES_KEY);
+    return BASEMAPS.hasOwnProperty(v) ? v : DEFAULT_MAP_NAMES;
+  }
+
+  function makeBaseLayer(kind) {
+    var p = BASEMAPS[kind];
+    return L.tileLayer(p.url, {
+      maxZoom: p.maxZoom,
+      attribution: p.attribution,
+      updateWhenIdle: true,
+      keepBuffer: 1,
+      // CORS tiles (OSM and Esri send Access-Control-Allow-Origin: *) so the service worker gets
+      // readable responses instead of opaque ones (opaque ones waste storage quota).
+      crossOrigin: 'anonymous'
+    });
+  }
+
+  /** Switch the base map. save: remember the choice on this device. */
+  function setMapNames(kind, save) {
+    if (!BASEMAPS.hasOwnProperty(kind)) kind = DEFAULT_MAP_NAMES;
+    if (save) lsSet(MAP_NAMES_KEY, kind);
+    TILE_PROVIDER = BASEMAPS[kind];
+    state.mapNames = kind;
+    if (layers.base && layers.base._rmKind !== kind) {
+      state.map.removeLayer(layers.base);
+      layers.base = null;
+    }
+    if (!layers.base) {
+      layers.base = makeBaseLayer(kind);
+      layers.base._rmKind = kind;
+      layers.base.addTo(state.map);
+      layers.base.bringToBack();
+    }
+    var radios = document.querySelectorAll('input[name="map-names"]');
+    Array.prototype.forEach.call(radios, function (r) { r.checked = r.value === kind; });
+  }
+
   function initMap() {
     var map = L.map('map', {
       center: DEFAULT_CENTER,
@@ -872,16 +925,9 @@
     });
     state.map = map;
     ReadyMap.map = map;
+    ReadyMap.mapNames = { get: function () { return state.mapNames; }, set: function (k) { setMapNames(k, true); }, layer: function () { return layers.base; }, kinds: BASEMAPS };
 
-    layers.base = L.tileLayer(TILE_URL, {
-      maxZoom: TILE_PROVIDER.maxZoom,
-      attribution: OSM_ATTRIBUTION,
-      updateWhenIdle: true,
-      keepBuffer: 1,
-      // CORS tiles (OSM sends Access-Control-Allow-Origin: *) so the service worker gets
-      // readable responses instead of opaque ones (opaque ones waste storage quota).
-      crossOrigin: 'anonymous'
-    }).addTo(map);
+    setMapNames(readMapNames(), false);
 
     // Weather overlays sit above base tiles (200) and below vector overlays (400) / markers (600).
     var wxPane = map.createPane('weather');
@@ -5731,6 +5777,10 @@
     sheetCloseHooks['sheet-tools'] = function () { $('btn-tools').setAttribute('aria-expanded', 'false'); };
 
     $('btn-about').addEventListener('click', function (e) { $('clear-status').textContent = ''; openSheet('sheet-about', e.currentTarget); });
+    // 1.4.3: Map names (readable vs local language), remembered on this device
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="map-names"]'), function (r) {
+      r.addEventListener('change', function () { if (r.checked) setMapNames(r.value, true); });
+    });
 
     $('btn-compass').addEventListener('click', function (e) { startCompass(e.currentTarget); });
     $('btn-compass-stop').addEventListener('click', function () { closeSheet('sheet-compass'); });

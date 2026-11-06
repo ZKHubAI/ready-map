@@ -1,12 +1,12 @@
 # Ready Map
 
 A small, static map web app for the **Ready** emergency-prep bot. It works worldwide. It uses the
-phone's own GPS, shows your spot on an OpenStreetMap map, lets you save places, finds help nearby,
+phone's own GPS, shows your spot on a world map with easy-to-read place names (or local-language names), lets you save places, finds help nearby,
 keeps the map parts you have viewed for offline use, and can show live weather (rain radar, clouds,
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.4.2.
+Version 1.4.3.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -60,6 +60,21 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
 
+## Changes in 1.4.3
+
+- **Easy-to-read place names, worldwide.** The default map is now Esri World Street Map, which writes
+  places in a script most people can read (Beijing, Tianjin, Shijiazhuang, Tokyo, Seoul) instead of only
+  the local script (北京市, 天津市, 石家庄市). Before, the OpenStreetMap tiles showed China, Japan, Korea
+  and other places only in their own language.
+- **More tools → Place names on the map**: **Easy to read** (Esri, default) or **Local names**
+  (OpenStreetMap, each place in its own language). The choice is kept on this device
+  (`localStorage` key `readyMap.mapNames.v1`, `readable` or `local`).
+- The map credit line follows the map you picked (Esri and its sources, or OpenStreetMap).
+- Radar, weather, ocean layers, locate, measure and the radar loop button work the same on both maps.
+  Weather warning text is never changed or translated.
+- The service worker caches viewed tiles from both map hosts (`TILE_HOSTS` in `sw.js`; for Esri only
+  the World Street Map tile path), still max 500 in total.
+
 ## Changes in 1.4.2
 
 - **Radar loop keeps playing after you close Weather.** Closing the Weather sheet (or opening a warning's
@@ -107,7 +122,8 @@ the same kind of link for the current point.
 
 The app only contacts:
 
-- `tile.openstreetmap.org` for map tiles. Only tiles you actually view are loaded; the service
+- `server.arcgisonline.com` (Esri World Street Map, the default "Easy to read" map) or, if you pick
+  **Local names**, `tile.openstreetmap.org` for map tiles. Only tiles you actually view are loaded; the service
   worker keeps them (max 500, oldest dropped first) so they show offline.
 - Find nearby (since 1.3.1 it searches as soon as you tap Hospital, Shelter, Police, Fire station
   or Gas in the This spot panel; it sends that spot's coordinates):
@@ -156,7 +172,7 @@ The app only contacts:
 - Google Maps / Apple Maps only when you tap their links.
 
 Weather, ocean and world data are never cached by the service worker (it only handles the app's
-own files and OSM tiles). No cookies, no analytics.
+own files and base map tiles). No cookies, no analytics.
 
 ## Map layers (Weather sheet)
 
@@ -286,15 +302,15 @@ links go to the NWS point forecast). Over open sea there is no link.
 
 ## Offline map (no area download)
 
-The [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/) does not allow bulk
+The [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/) (and Esri's terms) do not allow bulk
 download or prefetch features, so there is no "download this area" button. **More tools → Offline
 map** (`#btn-save-area`) explains how it works: the map keeps the tiles you have already looked at
 (up to 500), so to keep an area, look around it at the zoom levels you need while you have signal.
 The panel shows how many tiles are kept and has **Clear saved map**.
 
-The tile source is one `TILE_PROVIDER` object at the top of `app.js`
-(`url`, `attribution`, `maxZoom`, `allowPrefetch: false`). A provider that allows offline
-download could be configured there later (also update `TILE_HOST` in `sw.js` and the CSP in
+The tile sources are the `BASEMAPS` object at the top of `app.js` (`readable` = Esri, `local` = OSM;
+each has `url`, `attribution`, `maxZoom`, `allowPrefetch: false`; `TILE_PROVIDER` is the active one).
+A new provider also needs its host in `TILE_HOSTS` in `sw.js` and the CSP in
 `index.html`). Map mistakes can be reported at <https://www.openstreetmap.org/fixthemap>
 (linked in About).
 

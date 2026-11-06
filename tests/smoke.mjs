@@ -39,6 +39,13 @@ await sleep(3000);
 log("chips overflow:", await ev("(()=>{const n=document.querySelector('.chips');return n.scrollWidth>n.clientWidth})()"));
 await $click("#btn-tools");
 log("tools open:", await ev("!document.getElementById('sheet-tools').hidden"));
+// 1.4.3 Map names: default is easy-to-read (Esri); Local names (OSM) can be picked and is remembered
+const baseInfo = () => ev("(()=>{const l=ReadyMap.mapNames.layer();return ReadyMap.mapNames.get()+' | '+l._url.split('/')[2]+' | esri credit:'+/Esri/.test(document.querySelector('.leaflet-control-attribution').innerHTML)+' | osm credit:'+/OpenStreetMap/.test(document.querySelector('.leaflet-control-attribution').innerHTML)+' | radio:'+document.querySelector('input[name=map-names]:checked').value})()");
+log("map names default:", await baseInfo());
+await $click("input[name=map-names][value=local]"); await sleep(500);
+log("map names local:", await baseInfo(), "| saved:", await ev("localStorage.getItem('readyMap.mapNames.v1')"));
+await $click("input[name=map-names][value=readable]"); await sleep(500);
+log("map names readable:", await baseInfo(), "| saved:", await ev("localStorage.getItem('readyMap.mapNames.v1')"), "| base layers:", await ev("Object.values(ReadyMap.map._layers).filter(l=>l instanceof L.TileLayer && l.options.pane==='tilePane').length"));
 // Offline map helper (no prefetch): shows viewed-tile count
 await $click("#btn-save-area"); await sleep(1500);
 log("tools closed:", await ev("document.getElementById('sheet-tools').hidden"), "| offline count:", await text("#save-count"));
@@ -90,6 +97,12 @@ log("compass:", await text("#compass-reading"), "|", await text("#status-banner"
 log("tiles world z0-2:", await ev("ReadyMap.tilesForBounds([[-85,-180],[85,180]],0,2).count"));
 log("params:", await ev("JSON.stringify([ReadyMap.parseParams('?lat=91&lon=0'), ReadyMap.parseParams('?lat=1&lon=2&zoom=40'), ReadyMap.parseParams('?lat=0x10&lon=2')])"));
 log("DMS rollover:", await ev("ReadyMap.toDMS(10.9999999, -0.00001)"));
+
+// 1.4.3 Map names choice survives a reload
+await ev("ReadyMap.mapNames.set('local')");
+await send("Page.reload"); await sleep(3000);
+log("map names after reload:", await ev("ReadyMap.mapNames.get() + ' | ' + ReadyMap.mapNames.layer()._url.split('/')[2]"));
+await ev("ReadyMap.mapNames.set('readable')");
 
 const errs = events.filter((e) => e.method === "Runtime.exceptionThrown").map((e) => e.params.exceptionDetails?.exception?.description);
 log("uncaught errors:", errs.length ? errs.join(" | ") : "none");
