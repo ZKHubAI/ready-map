@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.6';
+  var VERSION = '1.4.7';
   // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
   // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
@@ -2515,10 +2515,11 @@
     if (!measure.layer) measure.layer = L.layerGroup().addTo(state.map);
     $('measure-panel').hidden = false;
     state.map.getContainer().classList.add('is-measuring');
-    document.body.classList.add('is-measuring');   // hides the spot card so the map gets more room
+    document.body.classList.add('is-measuring');   // the measure panel carries a compact copy of the spot details
     setTimeout(function () { state.map.invalidateSize(); }, 0);
     $('btn-measure').setAttribute('aria-pressed', 'true');
     renderMeasure();
+    SpotWx.syncSummary();
     $('measure-title').focus();
   }
   function stopMeasure() {
@@ -2537,6 +2538,7 @@
     if (isMe) {
       if (measure.pts.length && measure.pts[0].me) measure.pts[0] = pt; else measure.pts.unshift(pt);
     } else measure.pts.push(pt);
+    select({ lat: pt.lat, lon: pt.lon, label: 'Measure point ' + (measure.pts.indexOf(pt) + 1), source: 'measure' });
     renderMeasure();
   }
   function measureFromMe() {
@@ -2577,7 +2579,8 @@
     for (var i = 1; i < pts.length; i++) {
       var d = distanceMeters(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
       var from = pts[i - 1].me ? 'Me' : String(i), to = String(i + 1);
-      list.appendChild(el('li', { text: from + ' → ' + to + ': ' + formatMeasure(d) }));
+      var bearing = Math.round(bearingDeg(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon)) % 360;
+      list.appendChild(el('li', { text: from + ' → ' + to + ': ' + formatMeasure(d) + ', ' + compassWords(cardinal(bearing)) + ' ' + bearing + '°' }));
     }
     list.hidden = pts.length < 2;
     $('measure-total').textContent = pts.length < 2 ? '' : 'Total: ' + formatMeasure(measureTotal());
@@ -5361,7 +5364,7 @@
     }
     function marineUrl(lat, lon) {
       return MARINE + '?latitude=' + lat.toFixed(4) + '&longitude=' + lon.toFixed(4) +
-        '&current=sea_surface_temperature,wave_height,wave_direction,wave_period';
+        '&current=sea_surface_temperature,wave_height,wave_direction,wave_period,ocean_current_velocity,ocean_current_direction&velocity_unit=kmh';
     }
     /** Pure parsers (exposed for tests). */
     function parseForecast(j) {
@@ -5380,8 +5383,46 @@
     /** null = land (or no marine data): every value missing. */
     function parseMarine(j) {
       var c = (j && j.current) || {};
-      var out = { sstC: num(c.sea_surface_temperature), waveM: num(c.wave_height), waveDeg: num(c.wave_direction), waveS: num(c.wave_period) };
-      return out.sstC === null && out.waveM === null && out.waveS === null ? null : out;
+      var out = { sstC: num(c.sea_surface_temperature), waveM: num(c.wave_height), waveDeg: num(c.wave_direction), waveS: num(c.wave_period), currentKmh: num(c.ocean_current_velocity), currentDeg: num(c.ocean_current_direction) };
+      return out.sstC === null && out.waveM === null && out.waveS === null && out.currentKmh === null ? null : out;
+    }
+
+    // GMRT bathymetry: negative elevations only. Not a sounding or a navigation chart.
+    function parseDepth(value) {
+      var elevation = num(value);
+      return elevation !== null && elevation < -1 ? -elevation : null;
+    }
+    function depthLine(meters) {
+      if (meters === null || meters === undefined || meters <= 1) return '';
+      var round = function (v) { return (Math.round(v / 10) * 10).toLocaleString('en-US'); };
+      return 'About ' + round(meters) + ' m (' + round(meters * 3.28084) + ' ft) · GMRT/GEBCO';
+    }
+    function currentLine(m) {
+      if (m.currentKmh === null || m.currentKmh === undefined) return '';
+      var s = (m.currentKmh / 1.609344).toFixed(1) + ' mph (' + m.currentKmh.toFixed(1) + ' km/h)';
+      if (m.currentDeg !== null && m.currentDeg !== undefined) {
+        var deg = Math.round(m.currentDeg) % 360;
+        s += ' to the ' + compassWords(degToCompass(deg)) + ' (' + deg + '°)';
+      }
+      return s;
+    }
+    function syncSummary() {
+      var pw = $('point-wx'), copy = $('measure-spot');
+      copy.textContent = pw.textContent;
+      copy.hidden = pw.hidden;
+    }
+    function pendingSummary(msg) {
+      var pw = $('point-wx');
+      if (sw.shown) {
+        var previous = sw.shown.e;
+        renderEntry(previous, true);
+        pw.textContent = 'Previous spot (' + previous.lat.toFixed(4) + ', ' + previous.lon.toFixed(4) + '): ' + pw.textContent.replace(/^Saved: /, '') + ' · ' + msg;
+        syncSummary();
+      } else {
+        pw.textContent = msg;
+        pw.hidden = false;
+        syncSummary();
+      }
     }
 
     // ----- text -----
@@ -5450,20 +5491,28 @@
         if (sky) line.push(sky);
       }
       if (e.marine) {
-        row(dl, 'Sea temp', cBoth(e.marine.sstC), 'spotwx-marine');
-        row(dl, 'Waves', waveLine(e.marine), 'spotwx-marine');
-        if (e.marine.sstC !== null) line.push('Sea ' + Math.round(cToF(e.marine.sstC)) + '°F');
+        if (e.marine.sstC !== null) {
+          row(dl, 'Sea temp', cBoth(e.marine.sstC), 'spotwx-marine');
+          line.push('Sea ' + cBoth(e.marine.sstC));
+        }
+        if (e.marine.waveM !== null) row(dl, 'Waves', waveLine(e.marine), 'spotwx-marine');
+        var current = currentLine(e.marine);
+        if (current) { row(dl, 'Current', current, 'spotwx-marine'); line.push('Current ' + current); }
+        var depth = depthLine(e.depthM);
+        if (depth) { row(dl, 'Depth', depth, 'spotwx-marine'); line.push('Depth ' + depth); }
       }
       dl.hidden = !dl.firstChild;
       var t = formatLocalTime(new Date(e.at));
       $('spotwx-updated').textContent = e.wx || e.marine
         ? (saved ? 'Saved from ' + t + ': this is the last weather we got here, not new.' : 'Updated ' + t + '.') +
           (chip && chip.src === 'station' ? ' Air and sky: National Weather Service station.' : '') +
-          ' Weather data by Open-Meteo.com (CC BY 4.0).'
+          ' Weather data by Open-Meteo.com (CC BY 4.0).' +
+          (e.marine ? ' Currents are model estimates; depth is estimated bathymetry, not for navigation.' : '')
         : '';
       var pw = $('point-wx');
       pw.textContent = line.length ? (saved ? 'Saved: ' : 'Weather: ') + line.join(' · ') : '';
       pw.hidden = !line.length;
+      syncSummary();
       renderOfficial(e.lat, e.lon);
     }
     /** "Official weather service" link for the spot's country (1.3.0). */
@@ -5487,6 +5536,7 @@
       $('spotwx-updated').textContent = '';
       $('point-wx').hidden = true;
       $('point-wx').textContent = '';
+      syncSummary();
       setStatus(msg);
     }
 
@@ -5496,12 +5546,20 @@
         settle(countryQuick(lat, lon).then(function (cc) {
           return omFetch(forecastUrl(lat, lon), lat, lon, cc, function (u) { return getJson(u, signal); });
         }).then(function (got) { return { wx: parseForecast(got.j), model: got.model, filled: got.filled }; })),
-        settle(getJson(marineUrl(lat, lon), signal).then(parseMarine))
+        settle(getJson(marineUrl(lat, lon), signal).then(parseMarine).then(function (marine) {
+          if (!marine) return { marine: null, depthM: null };
+          return fetchWithTimeout('https://www.gmrt.org/services/PointServer?latitude=' + lat.toFixed(4) + '&longitude=' + lon.toFixed(4),
+            { credentials: 'omit' }, FETCH_TIMEOUT_MS, signal).then(function (res) {
+              if (!res.ok) throw new Error('Depth HTTP ' + res.status);
+              return res.text();
+            }).then(function (text) { return { marine: marine, depthM: parseDepth(text.trim()) }; },
+              function () { return { marine: marine, depthM: null }; });
+        }))
       ]).then(function (r) {
         if (!r[0].ok && !r[1].ok) throw r[0].e || new Error('failed');
         var wx = r[0].ok ? r[0].v.wx : null;
         return { wx: wx, model: r[0].ok ? r[0].v.model : null, filled: r[0].ok ? r[0].v.filled : false,
-          marine: r[1].ok ? r[1].v : null, wxFailed: !r[0].ok, marineFailed: !r[1].ok, at: Date.now(),
+          marine: r[1].ok ? r[1].v.marine : null, depthM: r[1].ok ? r[1].v.depthM : null, wxFailed: !r[0].ok, marineFailed: !r[1].ok, at: Date.now(),
           lat: lat, lon: lon };
       });
     }
@@ -5513,16 +5571,16 @@
       if (!p) { sw.key = null; renderEmpty(''); return; }
       var key = keyOf(p.lat, p.lon);
       var have = sw.cache[key];
-      if (key === sw.key && have && Date.now() - have.at < FRESH_MS && navigator.onLine) return; // same spot, fresh: nothing to do
+      if (key === sw.key && have && sw.shown && sw.shown.e === have && !sw.shown.saved && Date.now() - have.at < FRESH_MS && navigator.onLine) return; // same spot, fresh: nothing to do
       sw.key = key;
       // Offline: anything shown is saved, never "current".
       if (!navigator.onLine) {
         if (have) { renderEntry(have, true); setStatus('Weather needs internet. Showing what we saved earlier.'); }
-        else renderEmpty('Weather for this spot needs internet. Try again when you have signal.');
+        else pendingSummary('Weather for the new spot needs internet.');
         return;
       }
       if (have && Date.now() - have.at < FRESH_MS) { renderEntry(have, false); setStatus(have.wxFailed ? 'Could not get the air weather here right now.' : ''); return; }
-      if (have) renderEntry(have, true); else renderEmpty('');
+      if (have) renderEntry(have, true); else pendingSummary('Getting weather for the new spot…');
       setStatus('Getting the weather for this spot…');
       // Short wait so dragging around or GPS updates do not send a request for every move.
       sw.timer = setTimeout(function () { go(p.lat, p.lon, key); }, 350);
@@ -5547,7 +5605,7 @@
         var msg = navigator.onLine ? 'Could not get the weather for this spot right now. Try again in a few minutes.'
           : 'Weather for this spot needs internet. Try again when you have signal.';
         if (have) { renderEntry(have, true); setStatus(msg + ' Showing what we saved earlier.'); }
-        else renderEmpty(msg);
+        else pendingSummary(msg);
       });
     }
 
@@ -5568,11 +5626,11 @@
     }
 
     return { init: init, update: update, state: sw, parseForecast: parseForecast, parseMarine: parseMarine,
-      forecastUrl: forecastUrl, marineUrl: marineUrl, waveLine: waveLine, chipMatch: chipMatch };
+      forecastUrl: forecastUrl, marineUrl: marineUrl, waveLine: waveLine, chipMatch: chipMatch, parseDepth: parseDepth, depthLine: depthLine, currentLine: currentLine, syncSummary: syncSummary };
   })();
   ReadyMap.spotWeather = { state: SpotWx.state, update: SpotWx.update, parseForecast: SpotWx.parseForecast,
     parseMarine: SpotWx.parseMarine, forecastUrl: SpotWx.forecastUrl, marineUrl: SpotWx.marineUrl, waveLine: SpotWx.waveLine,
-    chipMatch: SpotWx.chipMatch };
+    chipMatch: SpotWx.chipMatch, parseDepth: SpotWx.parseDepth, depthLine: SpotWx.depthLine, currentLine: SpotWx.currentLine };
 
   // ---------------------------------------------------------------------------
   // 14d. Weather stations layer (1.3.0): live airport weather reports (METAR/ASOS/AWOS) worldwide.

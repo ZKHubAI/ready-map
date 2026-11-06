@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.4.6.
+Version 1.4.7.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -59,6 +59,13 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.4.7
+
+- Each measurement leg now keeps its initial compass heading and degrees alongside distance.
+- Measure keeps a compact weather/marine summary for the last tapped point, including in Full map. Zooming does not clear the readings; while a new spot loads, previous readings remain explicitly labelled with their coordinates.
+- Ocean pins show sea surface temperature, current speed and direction **toward**, and estimated depth when available, also in Weather facts. Text wraps on phones.
+- Currents and temperature: Open-Meteo; bathymetry: GMRT/GEBCO. Missing depth does not prevent weather. These are model/bathymetry estimates, **not for navigation** or safe-clearance decisions. No new accounts or keys.
 
 ## Changes in 1.4.6
 

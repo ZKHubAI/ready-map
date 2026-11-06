@@ -7,7 +7,7 @@
   <meta name="description" content="Ready Map: a simple map for anywhere in the world. It shows where you are, saves places, finds help nearby, and shows rain radar, clouds, disaster alerts and ocean layers.">
   <meta name="theme-color" content="#E86A17">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://gc.zgo.at; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://photon.komoot.io https://nominatim.openstreetmap.org https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io; worker-src 'self'; font-src 'self' https://tiles.openfreemap.org; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://gc.zgo.at; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://photon.komoot.io https://nominatim.openstreetmap.org https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io https://www.gmrt.org; worker-src 'self'; font-src 'self' https://tiles.openfreemap.org; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -62,6 +62,7 @@
       <p id="measure-status" class="measure-status" role="status" aria-live="polite"></p>
       <ol id="measure-legs" class="measure-legs" hidden></ol>
       <p id="measure-total" class="measure-total" aria-live="polite"></p>
+      <p id="measure-spot" class="measure-spot" aria-live="polite" hidden></p>
       <div class="measure-actions">
         <button type="button" id="btn-measure-undo" class="btn">Undo last</button>
         <button type="button" id="btn-measure-clear" class="btn">Clear</button>
@@ -741,7 +742,7 @@
         <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.4.6</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.4.7</span>. In an emergency, call 911.</p>
     </div>
   </section>
 

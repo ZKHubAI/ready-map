@@ -219,7 +219,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .coords-accuracy { font-size: 0.9rem; color: var(--muted); }
 .point-actions { display: flex; gap: 8px; margin-top: 8px; }
 .point-actions .btn { flex: 1 1 0; }
-.point-wx { font-size: 0.95rem; font-weight: 700; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.point-wx { font-size: 0.95rem; font-weight: 700; margin-top: 2px; white-space: normal; overflow-wrap: anywhere; }
+.measure-spot { font-size: 0.85rem; line-height: 1.35; margin: 6px 0; max-height: 18vh; overflow-y: auto; white-space: normal; overflow-wrap: anywhere; }
 .spotwx { display: grid; gap: 6px; justify-items: start; }
 .spotwx .lw-facts { width: 100%; }
 .spotwx-facts dt.spotwx-marine, .spotwx-facts dd.spotwx-marine { color: #0B4F6C; }
