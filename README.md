@@ -6,7 +6,7 @@ keeps the map parts you have viewed for offline use, and can show live weather (
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names.
 
-Version 1.4.5.
+Version 1.4.6.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -59,6 +59,14 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.4.6
+
+- Full map no longer drops the readable map on phones. A brief WebGL pause while the
+  map canvas grows is allowed to recover instead of immediately showing
+  "Readable map unavailable" and switching to the original map.
+- After Full map or Restore, the vector map is asked to resize. The original map
+  remains the fallback if the readable map truly cannot start or stay up.
 
 ## Changes in 1.4.5
 

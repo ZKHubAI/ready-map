@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.5';
+  var VERSION = '1.4.6';
   // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
   // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
@@ -824,6 +824,10 @@
     updateLayoutVars();
     requestAnimationFrame(function () {
       if (state.map) state.map.invalidateSize({ pan: false });
+      try {
+        var glMap = layers.base && layers.base.getMaplibreMap && layers.base.getMaplibreMap();
+        if (glMap && typeof glMap.resize === 'function') glMap.resize();
+      } catch (err) { /* phone resize after Full map is best-effort */ }
     });
   }
 
@@ -969,9 +973,32 @@
         if (base.getMaplibreMap) {
           var gl = base.getMaplibreMap();
           var timer = setTimeout(function () { fallbackBase(base); }, 25000);
-          gl.once('load', function () { clearTimeout(timer); });
-          base.once('remove', function () { clearTimeout(timer); });
-          gl.getCanvas().addEventListener('webglcontextlost', function () { fallbackBase(base); });
+          var lostTimer = null;
+          function clearWatch() {
+            clearTimeout(timer);
+            if (lostTimer) { clearTimeout(lostTimer); lostTimer = null; }
+          }
+          if (gl) {
+            gl.once('load', clearWatch);
+            base.once('remove', clearWatch);
+            var canvas = gl.getCanvas && gl.getCanvas();
+            if (canvas) {
+              // Phones often fire contextlost when Full map resizes the canvas.
+              // Allow the browser to restore instead of switching maps immediately.
+              canvas.addEventListener('webglcontextlost', function (ev) {
+                if (ev && ev.preventDefault) ev.preventDefault();
+                if (lostTimer) return;
+                lostTimer = setTimeout(function () {
+                  lostTimer = null;
+                  fallbackBase(base);
+                }, 4000);
+              });
+              canvas.addEventListener('webglcontextrestored', function () {
+                if (lostTimer) { clearTimeout(lostTimer); lostTimer = null; }
+                try { if (typeof gl.resize === 'function') gl.resize(); } catch (err) {}
+              });
+            }
+          }
         }
       } catch (e) { fallbackBase(base); }
     }
