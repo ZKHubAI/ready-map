@@ -7,7 +7,7 @@
   <meta name="description" content="Ready Map: a simple map for anywhere in the world. It shows where you are, saves places, finds help nearby, and shows rain radar, clouds, disaster alerts and ocean layers.">
   <meta name="theme-color" content="#E86A17">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://gc.zgo.at; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de; connect-src 'self' https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://photon.komoot.io https://nominatim.openstreetmap.org https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io https://www.gmrt.org; worker-src 'self'; font-src 'self' https://tiles.openfreemap.org; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://gc.zgo.at; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://nowcoast.noaa.gov https://tilecache.rainviewer.com https://gis.charttools.noaa.gov https://mapservices.weather.noaa.gov https://coastwatch.noaa.gov https://wms.gebco.net https://geo.weather.gc.ca https://maps.dwd.de https://basemap.nationalmap.gov https://tile.opentopomap.org https://tiles.openseamap.org; connect-src 'self' https://readymap.goatcounter.com https://tile.openstreetmap.org https://tiles.openfreemap.org https://overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee https://maps.mail.ru https://photon.komoot.io https://nominatim.openstreetmap.org https://nowcoast.noaa.gov https://api.weather.gov https://api.open-meteo.com https://marine-api.open-meteo.com https://api.rainviewer.com https://www.gdacs.org https://www.weather.gov https://geo.weather.gc.ca https://maps.dwd.de https://mesonet.agron.iastate.edu https://api-bdc.io https://www.gmrt.org; worker-src 'self'; font-src 'self' https://tiles.openfreemap.org; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -49,6 +49,7 @@
 
   <main class="map-wrap">
     <div id="map" role="region" aria-label="Map. Tap the map to drop a pin."></div>
+    <button type="button" id="btn-maps" class="map-maps" aria-haspopup="dialog" aria-controls="sheet-maps" aria-label="Map type: Street map. Change map type"><svg class="chip-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M12 3 2 8l10 5 10-5-10-5zM2 13l10 5 10-5M2 17.5l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/></svg><span id="btn-maps-label">Maps</span></button>
     <button type="button" id="btn-full-map" class="map-full-toggle" aria-pressed="false" aria-label="Full map. Hide map controls" aria-controls="point-card">Full map</button>
     <!-- 1.4.2 Radar loop on/off on the map: shown only when radar is on and has loop frames -->
     <button type="button" id="btn-map-loop" class="map-loop" aria-pressed="false" hidden><span id="map-loop-label" class="map-loop-label">Play radar loop</span><span id="map-loop-time" class="map-loop-time" aria-live="off"></span></button>
@@ -112,6 +113,31 @@
         <label><input type="radio" name="map-names" value="local"> Local names (北京, 東京, 서울)</label>
       </fieldset>
       <p class="hint">Easy to read keeps detailed streets and adds Latin/English names where available, sometimes beside local names. Local names uses the original map. The styles differ slightly. Warnings and weather text are not changed.</p>
+    </div>
+  </section>
+
+  <!-- 1.5.0 Map type: street map, topo, nautical chart, imagery, seamarks -->
+  <section id="sheet-maps" class="sheet sheet-small" role="dialog" aria-modal="true" aria-labelledby="maps-title" hidden>
+    <div class="sheet-head">
+      <h2 id="maps-title">Map type</h2>
+      <button type="button" class="sheet-close" data-close aria-label="Close map type">Close</button>
+    </div>
+    <div class="sheet-body">
+      <fieldset class="seg" id="map-type">
+        <legend>Show this map</legend>
+        <label><input type="radio" name="map-type" value="streets" checked> Street map</label>
+        <label><input type="radio" name="map-type" value="topo"> Topo map (USGS, U.S. only)</label>
+        <label><input type="radio" name="map-type" value="opentopo"> Topo map (OpenTopoMap, worldwide)</label>
+        <label><input type="radio" name="map-type" value="nautical"> Nautical chart (NOAA, U.S. waters)</label>
+        <label><input type="radio" name="map-type" value="imagery"> Aerial imagery (USGS, U.S. only)</label>
+      </fieldset>
+      <fieldset class="seg">
+        <legend>Add on top</legend>
+        <label class="check"><input type="checkbox" id="seamarks-toggle"> Seamarks: buoys, lights, beacons (OpenSeaMap, worldwide)</label>
+      </fieldset>
+      <p class="map-note" id="charts-note"><strong>For reference only.</strong> These maps and charts do not replace official charts, a compass, or a marine chart plotter. They need a signal to load live map pieces and are not saved for offline use.</p>
+      <p class="hint">Topo maps show hills with contour lines and trails for land navigation. The nautical chart shows depths, buoys and channels for boating. Aerial imagery is photos taken from above, not a live satellite view. Outside a map's area you see the street map instead. Place names in More tools change only the street map.</p>
+      <p class="fine">Topo: USGS The National Map and OpenTopoMap (OpenStreetMap data). Chart: NOAA Office of Coast Survey ENC chart display. Imagery: USGS The National Map Orthoimagery. Seamarks: OpenSeaMap. Credits show at the bottom of the map.</p>
     </div>
   </section>
 
@@ -265,7 +291,7 @@
       <p id="save-count" class="sheet-status" role="status" aria-live="polite"></p>
       <button type="button" id="btn-save-clear" class="btn btn-wide">Clear saved map</button>
       <p id="save-status" class="sheet-status" role="status" aria-live="polite"></p>
-      <p class="fine">Map pieces come from OpenFreeMap (Easy to read names) or OpenStreetMap (Local names). This app only keeps what you view; it never downloads whole areas ahead of time. Old pieces are removed first when it is full. Weather and ocean layers are never saved.</p>
+      <p class="fine">Map pieces come from OpenFreeMap (Easy to read names) or OpenStreetMap (Local names). This app only keeps what you view; it never downloads whole areas ahead of time. Old pieces are removed first when it is full. Weather and ocean layers, and the topo, chart, imagery and seamark maps (Maps button), are never saved.</p>
     </div>
   </section>
 
@@ -687,6 +713,7 @@
           <ul>
             <li>OpenFreeMap (tiles.openfreemap.org), for detailed map tiles, names, fonts and symbols, or OpenStreetMap (tile.openstreetmap.org) if you pick Local names in More tools.</li>
             <li>Overpass API, and as backups Photon (komoot) and Nominatim (OpenStreetMap), only when you tap a Find nearby button. Results are kept on this device for 24 hours.</li>
+            <li>Map type (Maps button on the map), only when you pick that map: USGS The National Map (basemap.nationalmap.gov) for the USGS topo map and aerial imagery, OpenTopoMap (tile.opentopomap.org) for the worldwide topo map, NOAA Office of Coast Survey (gis.charttools.noaa.gov) for the nautical chart, and OpenSeaMap (tiles.openseamap.org) for seamarks. They see the map area you are looking at, never your GPS spot.</li>
             <li>NOAA / National Weather Service, only when you turn on a weather layer.</li>
             <li>NOAA ocean services, only when you turn on an Ocean layer: NOAA nowCOAST (nowcoast.noaa.gov) for currents and sea temperature, NOAA Office of Coast Survey charts (gis.charttools.noaa.gov) for depth lines, and the National Weather Service map server (mapservices.weather.noaa.gov) for marine zones. They see the map area you are looking at.</li>
             <li>RainViewer, for world radar outside the U.S. (or when you pick World radar), and if NOAA radar does not work.</li>
@@ -711,7 +738,7 @@
 
       <h3>For bots: link to a spot</h3>
       <p>Add these to the link: <code>lat</code>, <code>lon</code>, and if you want, <code>label</code> and <code>zoom</code> (1 to 19).</p>
-      <p><code id="about-example" class="break">./?lat=40.7608&amp;lon=-111.891&amp;label=Meeting%20spot&amp;zoom=15</code></p>
+      <p><code id="about-example" class="break">./?lat=39.8283&amp;lon=-98.5795&amp;label=Meeting%20spot&amp;zoom=15</code></p>
 
       <h3>Offline map</h3>
       <p>The map keeps the parts you have already looked at (up to 500 map pieces), which may help without signal. Coverage can be incomplete, especially if names or map symbols are missing from the cache. To keep an area, look around it now at the zoom levels you need. The app does not download areas ahead of time. To free up space:</p>
@@ -742,7 +769,7 @@
         <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.4.7</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.5.0</span>. In an emergency, call 911.</p>
     </div>
   </section>
 

@@ -4,9 +4,10 @@ A small, static map web app for the **Ready** emergency-prep bot. It works world
 phone's own GPS, shows your spot on a world map with easy-to-read place names (or local-language names), lets you save places, finds help nearby,
 keeps the map parts you have viewed for offline use, and can show live weather (rain radar, clouds,
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
-Layers that only work in the United States say "U.S. only" in their names.
+Layers that only work in the United States say "U.S. only" in their names. The **Maps** button switches to a topo map,
+a NOAA nautical chart or aerial imagery, and can add OpenSeaMap seamarks.
 
-Version 1.4.7.
+Version 1.5.0.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -47,7 +48,7 @@ After changing any app file, bump `VERSION` in `sw.js` (and `app.js`) so phones 
 ## Link to a spot (for bots)
 
 ```
-https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
+https://<host>/ready-map/?lat=39.8283&lon=-98.5795&label=Meeting%20spot&zoom=15
 ```
 
 | Param | Meaning | Rules |
@@ -59,6 +60,25 @@ https://<host>/ready-map/?lat=40.7608&lon=-111.891&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.5.0
+
+- New **Maps** button on the map (under Full map, also there in Full map) opens **Map type**:
+  - **Street map** (default, unchanged; Place names in More tools still applies to it).
+  - **Topo map (USGS, U.S. only)**: `https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}` (native to zoom 16, scaled above).
+  - **Topo map (OpenTopoMap, worldwide)**: `https://tile.opentopomap.org/{z}/{x}/{y}.png` (native to zoom 17). Low-volume use as OpenTopoMap asks: tiles load only for the area being viewed, no prefetch, attribution shown.
+  - **Nautical chart (NOAA, U.S. waters)**: NOAA Office of Coast Survey chart display WMS 1.3.0,
+    `https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer`, layers 0 to 12, EPSG:3857, transparent PNG.
+  - **Aerial imagery (USGS, U.S. only)**: `https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}`. This is imagery, not a satellite connection.
+  - **Seamarks** overlay (any map type): `https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png`.
+- Charts draw above the street map, which stays underneath, so areas outside a chart's coverage show streets.
+  They sit below weather, ocean layers, pins and measuring. Each layer adds its credit to the map attribution.
+- Plain note in the panel: for reference only; does not replace official charts, a compass, or a marine chart plotter;
+  needs a signal to load live map pieces. **These layers are not cached** (not in `sw.js` TILE_HOSTS) and are not part of the offline map.
+- Choices are kept on this device: `readyMap.mapType.v1` (`streets`, `topo`, `opentopo`, `nautical`, `imagery`; default `streets`)
+  and `readyMap.seamarks.v1` (`true`/`false`, default off). GPS, Full map, measure, ocean pin details and warning text are unchanged.
+- The radar loop button moved down one slot to make room. The About link example now uses a neutral spot.
+- Browser check: `node tests/charts.mjs http://127.0.0.1:8000/` switches every map type at 390px and 1280px and checks credits.
 
 ## Changes in 1.4.7
 

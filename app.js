@@ -16,6 +16,7 @@
  *  14. Weather overlays (radar, satellite, warnings, world disaster alerts) + Ocean layers
  *      (currents, sea temperature, depth lines, marine zones, world currents, world sea depth)
  *  15. Startup
+ *  (4b. Map type, 1.5.0: topo, nautical chart, imagery, seamarks; live tiles only, never cached)
  */
 (function () {
   'use strict';
@@ -23,7 +24,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.4.7';
+  var VERSION = '1.5.0';
   // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
   // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
@@ -1006,6 +1007,115 @@
     Array.prototype.forEach.call(radios, function (r) { r.checked = r.value === kind; });
   }
 
+  // --- 1.5.0 Map type: street map (default) plus navigation charts --------------------
+  // Topo, nautical chart and imagery are drawn above the street map, which stays underneath,
+  // so places outside a chart's coverage still show streets. Live tiles only: none of these
+  // hosts are in sw.js TILE_HOSTS, so they are never cached and need signal to load.
+  var MAP_TYPE_KEY = 'readyMap.mapType.v1';      // 'streets' | 'topo' | 'opentopo' | 'nautical' | 'imagery'
+  var SEAMARKS_KEY = 'readyMap.seamarks.v1';     // 'true' | 'false'
+  var NOAA_CHART_WMS = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer';
+  var MAP_TYPES = {
+    streets: { label: 'Street map' },
+    topo: {
+      label: 'Topo map (USGS, U.S. only)',
+      url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
+      maxNativeZoom: 16,
+      attribution: 'Topo: <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USGS The National Map</a>'
+    },
+    opentopo: {
+      label: 'Topo map (OpenTopoMap, worldwide)',
+      url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+      maxNativeZoom: 17,
+      attribution: 'Topo: &copy; <a href="https://opentopomap.org/">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), data &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, SRTM'
+    },
+    nautical: {
+      label: 'Nautical chart (NOAA, U.S. waters)',
+      wms: NOAA_CHART_WMS,
+      layers: '0,1,2,3,4,5,6,7,8,9,10,11,12',
+      attribution: 'Chart: <a href="https://nauticalcharts.noaa.gov/">NOAA Office of Coast Survey</a> ENC chart display (reference only, not for navigation)'
+    },
+    imagery: {
+      label: 'Aerial imagery (USGS, U.S. only)',
+      url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+      maxNativeZoom: 16,
+      attribution: 'Imagery: <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USGS The National Map</a> Orthoimagery (USDA NAIP)'
+    }
+  };
+  var SEAMARKS = {
+    url: 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',
+    maxNativeZoom: 18,
+    attribution: 'Seamarks: &copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> contributors (CC-BY-SA)'
+  };
+  var chartLayer = null, seamarkLayer = null;
+
+  function readMapType() {
+    var v = lsGet(MAP_TYPE_KEY);
+    return MAP_TYPES.hasOwnProperty(v) ? v : 'streets';
+  }
+
+  function makeChartLayer(kind) {
+    var p = MAP_TYPES[kind];
+    if (p.wms) {
+      return L.tileLayer.wms(p.wms, {
+        layers: p.layers, styles: '', format: 'image/png', transparent: true, version: '1.3.0',
+        tileSize: 256, maxZoom: 19, pane: 'charts', attribution: p.attribution,
+        updateWhenIdle: true, keepBuffer: 1
+      });
+    }
+    return L.tileLayer(p.url, {
+      maxZoom: 19, maxNativeZoom: p.maxNativeZoom, pane: 'charts', attribution: p.attribution,
+      updateWhenIdle: true, keepBuffer: 1
+    });
+  }
+
+  /** Switch the map type. save: remember the choice on this device. */
+  function setMapType(kind, save) {
+    if (!MAP_TYPES.hasOwnProperty(kind)) kind = 'streets';
+    if (save) lsSet(MAP_TYPE_KEY, kind);
+    state.mapType = kind;
+    if (chartLayer && chartLayer._rmKind !== kind) {
+      state.map.removeLayer(chartLayer);
+      chartLayer = null;
+    }
+    if (kind !== 'streets' && !chartLayer) {
+      chartLayer = makeChartLayer(kind);
+      chartLayer._rmKind = kind;
+      chartLayer.addTo(state.map);
+    }
+    var radios = document.querySelectorAll('input[name="map-type"]');
+    Array.prototype.forEach.call(radios, function (r) { r.checked = r.value === kind; });
+    syncMapsButton();
+  }
+
+  function setSeamarks(on, save) {
+    on = !!on;
+    if (save) lsSet(SEAMARKS_KEY, on ? 'true' : 'false');
+    state.seamarks = on;
+    if (on && !seamarkLayer) {
+      seamarkLayer = L.tileLayer(SEAMARKS.url, {
+        maxZoom: 19, maxNativeZoom: SEAMARKS.maxNativeZoom, pane: 'seamarks',
+        attribution: SEAMARKS.attribution, updateWhenIdle: true, keepBuffer: 1
+      }).addTo(state.map);
+    } else if (!on && seamarkLayer) {
+      state.map.removeLayer(seamarkLayer);
+      seamarkLayer = null;
+    }
+    var box = $('seamarks-toggle');
+    if (box) box.checked = on;
+    syncMapsButton();
+  }
+
+  function syncMapsButton() {
+    var b = $('btn-maps');
+    if (!b) return;
+    var lbl = $('btn-maps-label');
+    var on = state.mapType && state.mapType !== 'streets';
+    b.classList.toggle('is-on', !!(on || state.seamarks));
+    var name = MAP_TYPES[state.mapType || 'streets'].label + (state.seamarks ? ', seamarks on' : '');
+    b.setAttribute('aria-label', 'Map type: ' + name + '. Change map type');
+    if (lbl) lbl.textContent = on ? ({ topo: 'Topo', opentopo: 'Topo', nautical: 'Chart', imagery: 'Imagery' })[state.mapType] : 'Maps';
+  }
+
   function initMap() {
     var map = L.map('map', {
       center: DEFAULT_CENTER,
@@ -1024,6 +1134,22 @@
     ReadyMap.mapNames = { get: function () { return state.mapNames; }, set: function (k) { setMapNames(k, true); }, layer: function () { return layers.base; }, kinds: BASEMAPS };
 
     setMapNames(readMapNames(), false);
+
+    // 1.5.0 navigation charts: above the street map (200), below ocean fills (330).
+    var chartsPane = map.createPane('charts');
+    chartsPane.style.zIndex = 250;
+    chartsPane.style.pointerEvents = 'none';
+    // OpenSeaMap seamarks sit above ocean lines (360) and below vector overlays (400).
+    var seamarksPane = map.createPane('seamarks');
+    seamarksPane.style.zIndex = 365;
+    seamarksPane.style.pointerEvents = 'none';
+    ReadyMap.mapType = {
+      get: function () { return state.mapType; }, set: function (k) { setMapType(k, true); },
+      layer: function () { return chartLayer; }, kinds: MAP_TYPES,
+      seamarks: { get: function () { return !!state.seamarks; }, set: function (on) { setSeamarks(on, true); }, layer: function () { return seamarkLayer; } }
+    };
+    setMapType(readMapType(), false);
+    setSeamarks(lsGet(SEAMARKS_KEY) === 'true', false);
 
     // Weather overlays sit above base tiles (200) and below vector overlays (400) / markers (600).
     var wxPane = map.createPane('weather');
@@ -5936,6 +6062,15 @@
       r.addEventListener('change', function () { if (r.checked) setMapNames(r.value, true); });
     });
 
+    // 1.5.0: Map type (street, topo, nautical chart, imagery) and seamarks, remembered on this device
+    $('btn-maps').addEventListener('click', function (e) {
+      if ($('sheet-maps').hidden) openSheet('sheet-maps', e.currentTarget); else closeSheet('sheet-maps');
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="map-type"]'), function (r) {
+      r.addEventListener('change', function () { if (r.checked) setMapType(r.value, true); });
+    });
+    $('seamarks-toggle').addEventListener('change', function (e) { setSeamarks(e.target.checked, true); });
+
     $('btn-compass').addEventListener('click', function (e) { startCompass(e.currentTarget); });
     $('btn-compass-stop').addEventListener('click', function () { closeSheet('sheet-compass'); });
     sheetCloseHooks['sheet-compass'] = function () { stopCompass(); stopPointer(); };
@@ -6064,7 +6199,7 @@
     try { SpotWx.init(); } catch (e) { /* spot weather is optional */ }
     try { Stations.init(); } catch (e) { /* stations layer is optional */ }
     updateLayoutVars();
-    $('about-example').textContent = buildSpotUrl(40.7608, -111.891, 'Meeting spot', 15);
+    $('about-example').textContent = buildSpotUrl(39.8283, -98.5795, 'Meeting spot', 15);
     registerServiceWorker();
     if (window.isSecureContext === false) {
       // Tell users early; the map still works.

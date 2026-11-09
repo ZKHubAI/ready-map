@@ -584,7 +584,19 @@ body.is-measuring .point-card { display: none; }
   font: inherit; font-weight: 800; font-size: 0.95rem;
   box-shadow: 0 2px 8px rgba(0,0,0,0.25); cursor: pointer;
 }
-.map-loop { top: calc(68px + var(--safe-top)); }
+/* 1.5.0 Map type button: under Full map; the radar loop button moves below it. */
+.map-maps {
+  position: absolute; top: calc(66px + var(--safe-top));
+  right: calc(10px + var(--safe-right)); z-index: 1050;
+  min-height: var(--tap); padding: 4px 14px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #FFFFFF; color: var(--ink); border: 2px solid var(--ink);
+  font: inherit; font-weight: 800; font-size: 0.95rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25); cursor: pointer;
+}
+.map-maps.is-on { background: var(--ink); color: #FFFFFF; }
+.map-note { margin: 10px 0; padding: 10px 12px; border-radius: 8px; border: 2px solid var(--orange-edge); background: #FFF7ED; color: var(--ink); }
+.map-loop { top: calc(122px + var(--safe-top)); }
 body.full-map .app-header,
 body.full-map .chips,
 body.full-map .point-card,

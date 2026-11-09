@@ -19,11 +19,14 @@
  *   its last result is kept only in page memory.
  *   1.4.1 visitor counter (gc.zgo.at/count.js and readymap.goatcounter.com) is never cached or
  *   intercepted here; offline or blocked, the counter simply does nothing.
+ *   1.5.0 map type hosts are never cached either: basemap.nationalmap.gov (USGS topo and imagery),
+ *   tile.opentopomap.org, gis.charttools.noaa.gov (NOAA chart display) and tiles.openseamap.org (seamarks).
+ *   They need signal and are not part of the offline map.
  *   Only same-origin app files and TILE_HOSTS tiles are ever cached.
  */
 'use strict';
 
-var VERSION = '1.4.7';
+var VERSION = '1.5.0';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js
