@@ -33,7 +33,13 @@ assert(wx.marineUrl(6.8853,-87.4406).includes('ocean_current_velocity,ocean_curr
 assert.equal(wx.currentLine(marine),'0.9 mph (1.5 km/h) to the east-northeast (60°)');
 assert.equal(wx.parseDepth('-3187'),3187);
 for(const v of [null,'',0,1,100,'NaN','-99999 missing']) assert.equal(wx.parseDepth(v),null);
-assert.equal(wx.depthLine(3187),'About 3,190 m (10,460 ft) · GMRT/GEBCO');
+assert.equal(wx.depthLine(3187),'About 3,190 m (10,460 ft), approximate depth from GEBCO (about 450 m grid), not for navigation');
+assert.equal(wx.depthLine(3187,'gmrt'),'About 3,190 m (10,460 ft), approximate depth from GMRT (built on GEBCO), not for navigation');
+assert.equal(wx.parseDapValue('elevation.elevation[1][1]\n[0], -60\n','elevation'),-60);
+assert.equal(wx.parseDapValue('tid.tid[1][1]\n[0], 17\n','tid'),17);
+assert.equal(wx.parseDapValue('Error {','elevation'),null);
+assert.equal(wx.gebcoUrl('elevation',50.1,-1.5),'https://dap.ceda.ac.uk/thredds/dodsC/bodc/gebco/global/gebco_2026/ice_surface_elevation/netcdf/GEBCO_2026.nc.ascii?elevation%5B33624%5D%5B42840%5D');
+assert(wx.gebcoUrl('tid',-90,180).endsWith('gebco_2026_tid.nc.ascii?tid%5B0%5D%5B0%5D'));
 assert.equal(wx.depthLine(null),'');
 const entry={lat:6.8853,lon:-87.4406,marine,depthM:3187,wx:null,at:Date.now()};
 wx.state.cache['6.89,-87.44']=entry;
@@ -56,7 +62,7 @@ assert.equal(ctx.state.selected.lat,8.8853);
 wx.state.cache['10.00,10.00']={lat:10,lon:10,marine:null,depthM:null,wx:null,at:Date.now()};
 ctx.state.selected={lat:10,lon:10};wx.update();
 assert.equal(ctx.$('spotwx-facts').children.length,0);assert(ctx.$('point-wx').hidden);
-for(const file of ['app.js','index.html','sw.js','README.md']) assert(readFileSync(new URL('../'+file,import.meta.url),'utf8').includes('1.5.1'));
+for(const file of ['app.js','index.html','sw.js','README.md']) assert(readFileSync(new URL('../'+file,import.meta.url),'utf8').includes('1.5.2'));
 assert.match(readFileSync(new URL('../styles.css',import.meta.url),'utf8'),/\.point-wx[^}]*white-space: normal/);
 // A failed optional depth service must not discard air or marine weather.
 ctx.OM_BEST={label:'best match'};
@@ -65,7 +71,7 @@ ctx.omFetch=async()=>({j:{current:{temperature_2m:81,weather_code:61}},model:nul
 ctx.wmoCodeText=()=> 'Rain';
 ctx.FETCH_TIMEOUT_MS=100;
 ctx.fetchWithTimeout=async url=>{
-  if(url.includes('gmrt.org')) throw Error('depth unavailable');
+  if(url.includes('gmrt.org')||url.includes('dap.ceda.ac.uk')) throw Error('depth unavailable');
   return {ok:true,json:async()=>({current:{sea_surface_temperature:29.6,ocean_current_velocity:0,ocean_current_direction:0}})};
 };
 ctx.state.selected={lat:6,lon:-88};wx.update();
@@ -75,4 +81,4 @@ assert.match(ctx.$('point-wx').textContent,/81°F/);
 assert.match(ctx.$('point-wx').textContent,/Current 0.0 mph.*north \(0°\)/);
 assert(!ctx.$('point-wx').textContent.includes('Depth'));
 assert.equal(wx.state.cache['6.00,-88.00'].depthM,null);
-console.log('PASS marine parsing, current direction, depth, compact summaries, retained headings, land omissions and version 1.5.1');
+console.log('PASS marine parsing, current direction, depth, compact summaries, retained headings, land omissions and version 1.5.2');

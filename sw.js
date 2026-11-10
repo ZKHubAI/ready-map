@@ -23,11 +23,14 @@
  *   tile.opentopomap.org, gis.charttools.noaa.gov (NOAA chart display) and tiles.openseamap.org (seamarks).
  *   They need signal and are not part of the offline map.
  *   1.5.1 World depth (wms.gebco.net, GEBCO_LATEST) is never cached either.
+ *   1.5.2: cache.kartverket.no (Norway chart) and dap.ceda.ac.uk (GEBCO depth for a tapped spot) are
+ *   never cached. The depth line files under ./contours/ are same-origin but are passed straight to the
+ *   network (see isContours), so they are never cached either (about 55 MB in all).
  *   Only same-origin app files and TILE_HOSTS tiles are ever cached.
  */
 'use strict';
 
-var VERSION = '1.5.1';
+var VERSION = '1.5.2';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js
@@ -38,6 +41,9 @@ var TILE_HOSTS = {
   'tile.openstreetmap.org': '/',
   'tiles.openfreemap.org': '/'
 };
+function isContours(url) {
+  return url.pathname.indexOf(new URL('./contours/', self.registration.scope).pathname) === 0;
+}
 function isTile(url) {
   return Object.prototype.hasOwnProperty.call(TILE_HOSTS, url.hostname) &&
     url.protocol === 'https:' && url.pathname.indexOf(TILE_HOSTS[url.hostname]) === 0;
@@ -98,6 +104,7 @@ self.addEventListener('fetch', function (event) {
     return;
   }
   if (url.origin === self.location.origin) {
+    if (isContours(url)) return; // 1.5.2 depth lines: network only, never cached
     event.respondWith(handleShell(req, url));
   }
   // All other origins: not intercepted, so never cached by us.

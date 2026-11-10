@@ -5,9 +5,9 @@ phone's own GPS, shows your spot on a world map with easy-to-read place names (o
 keeps the map parts you have viewed for offline use, and can show live weather (rain radar, clouds,
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names. The **Maps** button switches to a topo map,
-a NOAA nautical chart, GEBCO world depth or aerial imagery, and can add OpenSeaMap seamarks.
+a NOAA nautical chart, a Kartverket chart of Norway, GEBCO world depth or aerial imagery, can add depth lines, and can add OpenSeaMap seamarks.
 
-Version 1.5.1.
+Version 1.5.2.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -60,6 +60,27 @@ https://<host>/ready-map/?lat=39.8283&lon=-98.5795&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.5.2
+
+- **Depth lines** (Maps panel, works over any map type, like Seamarks): lines of equal depth at
+  20, 50, 100, 200, 500, 1000 and 2000 m, labeled in meters and feet. Ready Map made them from the
+  **GEBCO_2026 Grid** (public domain, attribution shown) and hosts them in `contours/` (about 55 MB in 524 files
+  of 10 by 10 degrees, plus a 1 MB world file for zoom 2 to 6). Detail files use every 4th grid cell
+  (1 arc-minute, about 1.85 km) with light smoothing, so lines are approximate and miss small shoals; there is
+  no 10 m line because the sampled grid cannot place it meaningfully. Rebuild with `tools/make-contours.py`.
+  Only the files for the area in view are loaded. **Not cached**: `sw.js` passes `./contours/` straight to the network.
+  No public GEBCO contour service covers every zoom: OpenSeaMap's GEBCO 2021 contour WMS only draws from about zoom 11,
+  and EMODnet's covers Europe only (both listed as options in the research notes).
+- **Tap for depth on any map type**: a tapped water spot shows "About N m (N ft), approximate depth from GEBCO
+  (about 450 m grid), not for navigation". The value is the GEBCO_2026 cell read with OPeNDAP from CEDA
+  (`https://dap.ceda.ac.uk/thredds/dodsC/bodc/gebco/global/gebco_2026/ice_surface_elevation/netcdf/GEBCO_2026.nc.ascii?elevation[i][j]`).
+  Where Open-Meteo has no marine forecast, GEBCO's type grid (`gebco_2026_tid.nc`) must call the cell a measured
+  sea depth (TID 10 to 17), so land below sea level is not shown as water. GMRT (CC BY 4.0) is the backup and
+  is labeled GMRT. GEBCO's own WMS answers GetFeatureInfo with no values, so it cannot be used for this.
+- **Nautical chart (Kartverket, Norway)**: `https://cache.kartverket.no/v1/wmts/1.0.0/sjokartraster/default/webmercator/{z}/{y}/{x}.png`,
+  open data under CC BY 4.0, credit "&copy; Kartverket", not approved for navigation. Norway and Svalbard waters.
+- New hosts: cache.kartverket.no (images) and dap.ceda.ac.uk (spot depth) added to the page's allowed sources; neither is cached.
 
 ## Changes in 1.5.1
 
