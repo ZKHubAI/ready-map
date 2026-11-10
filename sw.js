@@ -26,11 +26,13 @@
  *   1.5.2: cache.kartverket.no (Norway chart) and dap.ceda.ac.uk (GEBCO depth for a tapped spot) are
  *   never cached. The depth line files under ./contours/ are same-origin but are passed straight to the
  *   network (see isContours), so they are never cached either (about 55 MB in all).
+ *   1.5.3: ows.emodnet-bathymetry.eu (Europe depth), warehouse.ausseabed.gov.au (Australia depth) and
+ *   geoserver.openseamap.org (close-up depth lines) are never cached.
  *   Only same-origin app files and TILE_HOSTS tiles are ever cached.
  */
 'use strict';
 
-var VERSION = '1.5.2';
+var VERSION = '1.5.3';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js

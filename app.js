@@ -17,7 +17,8 @@
  *      (currents, sea temperature, depth lines, marine zones, world currents, world sea depth)
  *  15. Startup
  *  (4b. Map type, 1.5.0: topo, nautical chart, imagery, seamarks; 1.5.1 world depth; 1.5.2 Norway chart,
- *   depth contour lines and tap-for-depth from GEBCO; live tiles and contour files are never cached)
+ *   depth contour lines and tap-for-depth from GEBCO; 1.5.3 Europe and Australia depth, close-up depth lines;
+ *   live tiles and contour files are never cached)
  */
 (function () {
   'use strict';
@@ -25,7 +26,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.5.2';
+  var VERSION = '1.5.3';
   // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
   // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
@@ -1012,7 +1013,7 @@
   // Topo, nautical chart and imagery are drawn above the street map, which stays underneath,
   // so places outside a chart's coverage still show streets. Live tiles only: none of these
   // hosts are in sw.js TILE_HOSTS, so they are never cached and need signal to load.
-  var MAP_TYPE_KEY = 'readyMap.mapType.v1';      // 'streets' | 'topo' | 'opentopo' | 'nautical' | 'norway' | 'worlddepth' | 'imagery'
+  var MAP_TYPE_KEY = 'readyMap.mapType.v1';      // 'streets' | 'topo' | 'opentopo' | 'nautical' | 'norway' | 'worlddepth' | 'europe' | 'australia' | 'imagery'
   var SEAMARKS_KEY = 'readyMap.seamarks.v1';     // 'true' | 'false'
   var NOAA_CHART_WMS = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer';
   var MAP_TYPES = {
@@ -1044,6 +1045,22 @@
       transparent: false,
       maxNativeZoom: 10,
       attribution: 'Depth: Imagery reproduced from the GEBCO_2026 Grid, <a href="https://www.gebco.net/">GEBCO Compilation Group (2026) GEBCO 2026 Grid</a> (doi:10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa). Not for navigation'
+    },
+    // 1.5.3 EMODnet Bathymetry: mean depth (about 115 m grid) in atlas colours, with EMODnet's own
+    // labeled contours (50 to 5000 m). Transparent outside European seas, so streets show there.
+    europe: {
+      label: 'Europe depth (EMODnet, European seas)',
+      wms: 'https://ows.emodnet-bathymetry.eu/wms',
+      layers: 'emodnet:mean_atlas_land,emodnet:contours',
+      attribution: 'Depth: <a href="https://emodnet.ec.europa.eu/en/bathymetry">EMODnet Bathymetry Consortium</a>, EMODnet Digital Bathymetry (DTM) and contours (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). European seas only, not for navigation'
+    },
+    // 1.5.3 AusSeabed / Geoscience Australia AusBathyTopo 250m 2026 (already hill-shaded; the _HS
+    // layer alone is grey relief, so it is not added). Transparent outside 92 to 172 E, 8 to 60 S.
+    australia: {
+      label: 'Australia depth (AusSeabed, Australian waters)',
+      wms: 'https://warehouse.ausseabed.gov.au/geoserver/ows',
+      layers: 'ausseabed:AusBathyTopo__Australia__Bathymetry__250m_2026',
+      attribution: 'Depth: &copy; Commonwealth of Australia (<a href="https://www.ga.gov.au/">Geoscience Australia</a>) 2026, AusBathyTopo (Australia) 250m 2026 via AusSeabed (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Australian waters only, not for navigation'
     },
     // 1.5.2 Norwegian Mapping Authority raster sea charts, open data (CC BY 4.0), Norway and Svalbard.
     norway: {
@@ -1128,10 +1145,10 @@
     if (!b) return;
     var lbl = $('btn-maps-label');
     var on = state.mapType && state.mapType !== 'streets';
-    b.classList.toggle('is-on', !!(on || state.seamarks || state.contours));
-    var name = MAP_TYPES[state.mapType || 'streets'].label + (state.seamarks ? ', seamarks on' : '') + (state.contours ? ', depth lines on' : '');
+    b.classList.toggle('is-on', !!(on || state.seamarks || state.contours || state.closeup));
+    var name = MAP_TYPES[state.mapType || 'streets'].label + (state.seamarks ? ', seamarks on' : '') + (state.contours ? ', depth lines on' : '') + (state.closeup ? ', close-up depth lines on' : '');
     b.setAttribute('aria-label', 'Map type: ' + name + '. Change map type');
-    if (lbl) lbl.textContent = on ? ({ topo: 'Topo', opentopo: 'Topo', nautical: 'Chart', norway: 'Chart', worlddepth: 'Depth', imagery: 'Imagery' })[state.mapType] : 'Maps';
+    if (lbl) lbl.textContent = on ? ({ topo: 'Topo', opentopo: 'Topo', nautical: 'Chart', norway: 'Chart', worlddepth: 'Depth', europe: 'Depth', australia: 'Depth', imagery: 'Imagery' })[state.mapType] : 'Maps';
   }
 
   // --- 1.5.2 Depth contour lines (overlay for any map type) -----------------------------
@@ -1278,6 +1295,37 @@
     return ContourLayer;
   }
 
+  // --- 1.5.3 Close-up depth lines: OpenSeaMap's GEBCO 2021 contour WMS. The server draws them only at
+  // about 1:280,000 or closer, so the layer is limited to zoom 11 and closer. Live only, never cached.
+  var CLOSEUP_KEY = 'readyMap.closeupContours.v1';  // 'true' | 'false'
+  var CLOSEUP = {
+    wms: 'https://geoserver.openseamap.org/geoserver/wms',
+    layers: 'gebco2021:gebco2021_contour',
+    minZoom: 11,
+    attribution: 'Close-up depth lines: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> and GEBCO 2021 Grid (derived product), by <a href="https://www.openseamap.org/">OpenSeaMap</a> (<a href="https://opendatacommons.org/licenses/odbl/">ODbL</a>). Not for navigation'
+  };
+  var closeupLayer = null;
+  function syncCloseupHint() {
+    var h = $('closeup-hint');
+    if (h) h.hidden = !(state.closeup && state.map && state.map.getZoom() < CLOSEUP.minZoom);
+  }
+  function setCloseup(on, save) {
+    on = !!on;
+    if (save) lsSet(CLOSEUP_KEY, on ? 'true' : 'false');
+    state.closeup = on;
+    if (on && !closeupLayer) {
+      closeupLayer = L.tileLayer.wms(CLOSEUP.wms, {
+        layers: CLOSEUP.layers, styles: '', format: 'image/png', transparent: true, version: '1.3.0',
+        tileSize: 256, minZoom: CLOSEUP.minZoom, maxZoom: 19, pane: 'contours', attribution: CLOSEUP.attribution,
+        updateWhenIdle: true, keepBuffer: 1
+      }).addTo(state.map);
+    } else if (!on && closeupLayer) { state.map.removeLayer(closeupLayer); closeupLayer = null; }
+    var box = $('closeup-toggle');
+    if (box) box.checked = on;
+    syncCloseupHint();
+    syncMapsButton();
+  }
+
   function setContours(on, save) {
     on = !!on;
     if (save) lsSet(CONTOURS_KEY, on ? 'true' : 'false');
@@ -1325,11 +1373,14 @@
       get: function () { return state.mapType; }, set: function (k) { setMapType(k, true); },
       layer: function () { return chartLayer; }, kinds: MAP_TYPES,
       seamarks: { get: function () { return !!state.seamarks; }, set: function (on) { setSeamarks(on, true); }, layer: function () { return seamarkLayer; } },
-      contours: { get: function () { return !!state.contours; }, set: function (on) { setContours(on, true); }, layer: function () { return contourLayer; } }
+      contours: { get: function () { return !!state.contours; }, set: function (on) { setContours(on, true); }, layer: function () { return contourLayer; } },
+      closeup: { get: function () { return !!state.closeup; }, set: function (on) { setCloseup(on, true); }, layer: function () { return closeupLayer; }, minZoom: CLOSEUP.minZoom }
     };
     setMapType(readMapType(), false);
     setSeamarks(lsGet(SEAMARKS_KEY) === 'true', false);
     setContours(lsGet(CONTOURS_KEY) === 'true', false);
+    setCloseup(lsGet(CLOSEUP_KEY) === 'true', false);
+    map.on('zoomend', syncCloseupHint);
 
     // Weather overlays sit above base tiles (200) and below vector overlays (400) / markers (600).
     var wxPane = map.createPane('weather');
@@ -6297,6 +6348,7 @@
     });
     $('seamarks-toggle').addEventListener('change', function (e) { setSeamarks(e.target.checked, true); });
     $('contours-toggle').addEventListener('change', function (e) { setContours(e.target.checked, true); });
+    $('closeup-toggle').addEventListener('change', function (e) { setCloseup(e.target.checked, true); });
 
     $('btn-compass').addEventListener('click', function (e) { startCompass(e.currentTarget); });
     $('btn-compass-stop').addEventListener('click', function () { closeSheet('sheet-compass'); });

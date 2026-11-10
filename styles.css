@@ -594,6 +594,8 @@ body.is-measuring .point-card { display: none; }
   font: inherit; font-weight: 800; font-size: 0.95rem;
   box-shadow: 0 2px 8px rgba(0,0,0,0.25); cursor: pointer;
 }
+.map-group { margin-top: 12px; }
+.map-group legend { font-size: 1rem; color: var(--ink); }
 .map-maps.is-on { background: var(--ink); color: #FFFFFF; }
 .map-note { margin: 10px 0; padding: 10px 12px; border-radius: 8px; border: 2px solid var(--orange-edge); background: #FFF7ED; color: var(--ink); }
 .map-loop { top: calc(122px + var(--safe-top)); }

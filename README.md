@@ -5,9 +5,9 @@ phone's own GPS, shows your spot on a world map with easy-to-read place names (o
 keeps the map parts you have viewed for offline use, and can show live weather (rain radar, clouds,
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names. The **Maps** button switches to a topo map,
-a NOAA nautical chart, a Kartverket chart of Norway, GEBCO world depth or aerial imagery, can add depth lines, and can add OpenSeaMap seamarks.
+a NOAA nautical chart, a Kartverket chart of Norway, GEBCO world depth, EMODnet Europe depth, AusSeabed Australia depth or aerial imagery, can add close-up depth lines, can add depth lines, and can add OpenSeaMap seamarks.
 
-Version 1.5.2.
+Version 1.5.3.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -60,6 +60,24 @@ https://<host>/ready-map/?lat=39.8283&lon=-98.5795&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.5.3
+
+- The Maps panel is grouped: **Map type** (street, topo, imagery), **Charts** (NOAA, Kartverket), **Depth**
+  (world, Europe, Australia) and **Overlays** (seamarks, depth lines, close-up depth lines).
+- **Europe depth (EMODnet, European seas)**: WMS 1.3.0 `https://ows.emodnet-bathymetry.eu/wms`, layers
+  `emodnet:mean_atlas_land,emodnet:contours` (mean depth, about 115 m grid, with labeled 50 to 5000 m contours).
+  CC BY 4.0, credit "EMODnet Bathymetry Consortium, EMODnet Digital Bathymetry (DTM)". Transparent outside its area.
+- **Australia depth (AusSeabed, Australian waters)**: WMS 1.3.0 `https://warehouse.ausseabed.gov.au/geoserver/ows`,
+  layer `ausseabed:AusBathyTopo__Australia__Bathymetry__250m_2026`. CC BY 4.0, credit
+  "© Commonwealth of Australia (Geoscience Australia) 2026". The `_HS` layer is grey relief only and the main layer is
+  already shaded, so `_HS` is not used.
+- **Close-up depth lines** (separate overlay, so they are not mixed with Ready Map's GEBCO 2026 lines, which use other depths):
+  OpenSeaMap WMS `https://geoserver.openseamap.org/geoserver/wms`, layer `gebco2021:gebco2021_contour`, zoom 11 and closer
+  (the server draws nothing farther out). ODbL, credit "© OpenStreetMap contributors and GEBCO 2021 Grid (derived product)".
+  A hint in the panel says to zoom in when it is on and the map is too far out.
+- All three are labeled with their area and "not for navigation", are not cached (`sw.js`), and their hosts were added to the
+  page's allowed image sources. Saved choice for the overlay: `readyMap.closeupContours.v1`.
 
 ## Changes in 1.5.2
 

@@ -1,4 +1,4 @@
-// Dev-only browser check for 1.5.2 map types (not part of the app). Needs Chrome and network.
+// Dev-only browser check for 1.5.3 map types (not part of the app). Needs Chrome and network.
 // usage: node tests/charts.mjs http://127.0.0.1:8000/   (screenshots go to READY_MAP_SHOT_DIR or /workspace)
 import { spawn } from "node:child_process";
 import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
@@ -37,7 +37,7 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
   await send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile });
   await send("Page.navigate", { url: base + "index.html?lat=47.6&lon=-122.4&zoom=12&label=Chart%20check" });
   await sleep(3500);
-  assert(await ev("ReadyMap.version==='1.5.2' && document.getElementById('app-version').textContent==='1.5.2'"), `${w}px version 1.5.2`);
+  assert(await ev("ReadyMap.version==='1.5.3' && document.getElementById('app-version').textContent==='1.5.3'"), `${w}px version 1.5.3`);
   assert(await ev("ReadyMap.mapType.get()==='streets' && !ReadyMap.mapType.layer() && !!ReadyMap.mapNames.layer()"), `${w}px defaults to street map`);
   assert(await ev("(()=>{const r=document.getElementById('btn-maps').getBoundingClientRect();return r.width>=44&&r.height>=44&&r.right<=innerWidth})()"), `${w}px Maps button visible and tappable`);
   for (const [kind, credit] of Object.entries(KINDS)) {
@@ -48,7 +48,7 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
     assert(await ev(`ReadyMap.mapType.get()==='${kind}' && ReadyMap.map.hasLayer(ReadyMap.mapType.layer()) && ReadyMap.map.hasLayer(ReadyMap.mapNames.layer())`), `${w}px ${kind} on, street map kept underneath`);
     assert(await waitFor(`[...document.querySelectorAll('.leaflet-charts-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0).length>0`), `${w}px ${kind} tiles loaded`);
     assert(await ev(`document.querySelector('.leaflet-control-attribution').textContent.includes(${JSON.stringify(credit)})`), `${w}px ${kind} attribution shows`);
-    await sleep(1200); await shot(`ready-map-v152-${tag}-${w}-${kind}.png`);
+    await sleep(1200); await shot(`ready-map-v153-${tag}-${w}-${kind}.png`);
   }
   await ev("document.getElementById('btn-maps').click()"); await sleep(300);
   await ev("document.getElementById('seamarks-toggle').click()");
@@ -58,8 +58,8 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
   assert(await waitFor(`[...document.querySelectorAll('.leaflet-seamarks-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0).length>0`), `${w}px seamark tiles loaded`);
   assert(await ev("document.querySelector('.leaflet-control-attribution').textContent.includes('OpenSeaMap') && !document.querySelector('.leaflet-control-attribution').textContent.includes('Coast Survey')"), `${w}px seamark attribution shows, chart credit removed`);
   assert(await ev("localStorage.getItem('readyMap.mapType.v1')==='streets' && localStorage.getItem('readyMap.seamarks.v1')==='true'"), `${w}px choices saved`);
-  await shot(`ready-map-v152-${tag}-${w}-seamarks.png`);
-  // 1.5.2 World depth with Seamarks on top, away from U.S. chart coverage (English Channel).
+  await shot(`ready-map-v153-${tag}-${w}-seamarks.png`);
+  // 1.5.3 World depth with Seamarks on top, away from U.S. chart coverage (English Channel).
   await ev("ReadyMap.map.setView([50.1,-1.5],8,{animate:false})"); await sleep(500);
   await ev("document.getElementById('btn-maps').click()"); await sleep(300);
   await ev("document.querySelector('input[name=map-type][value=worlddepth]').click()");
@@ -68,8 +68,8 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
   assert(await waitFor(`[...document.querySelectorAll('.leaflet-charts-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0&&i.src.includes('wms.gebco.net')).length>0 && [...document.querySelectorAll('.leaflet-seamarks-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0).length>0`, 30000), `${w}px world depth and seamark tiles loaded worldwide`);
   assert(await ev("(()=>{const t=document.querySelector('.leaflet-control-attribution').textContent;return t.includes('Imagery reproduced from the GEBCO_2026 Grid')&&t.includes('OpenSeaMap')&&t.includes('Not for navigation')})()"), `${w}px GEBCO and seamark attribution show`);
   assert(await ev("document.getElementById('btn-maps-label').textContent==='Depth'"), `${w}px Maps button says Depth`);
-  await sleep(1500); await shot(`ready-map-v152-${tag}-${w}-worlddepth-seamarks.png`);
-  // 1.5.2 Norway chart (Kartverket) at the Oslofjord.
+  await sleep(1500); await shot(`ready-map-v153-${tag}-${w}-worlddepth-seamarks.png`);
+  // 1.5.3 Norway chart (Kartverket) at the Oslofjord.
   await ev("ReadyMap.map.setView([59.0,10.6],11,{animate:false})"); await sleep(400);
   await ev("document.getElementById('btn-maps').click()"); await sleep(300);
   await ev("document.querySelector('input[name=map-type][value=norway]').click()");
@@ -77,7 +77,33 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
   assert(await ev("ReadyMap.mapType.get()==='norway' && ReadyMap.map.hasLayer(ReadyMap.mapType.layer())"), `${w}px Norway chart on`);
   assert(await waitFor(`[...document.querySelectorAll('.leaflet-charts-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0&&i.src.includes('cache.kartverket.no')).length>0`), `${w}px Norway chart tiles loaded`);
   assert(await ev("document.querySelector('.leaflet-control-attribution').textContent.includes('Kartverket')"), `${w}px Kartverket attribution shows`);
-  await sleep(1000); await shot(`ready-map-v152-${tag}-${w}-norway.png`);
+  await sleep(1000); await shot(`ready-map-v153-${tag}-${w}-norway.png`);
+  // 1.5.3 Europe depth (EMODnet) and Australia depth (AusSeabed).
+  for (const [kind, lat, lon, z, host, credit] of [['europe', 50.1, -1.5, 9, 'ows.emodnet-bathymetry.eu', 'EMODnet Bathymetry Consortium'], ['australia', -33.85, 151.6, 8, 'warehouse.ausseabed.gov.au', 'Geoscience Australia']]) {
+    await ev(`ReadyMap.map.setView([${lat},${lon}],${z},{animate:false})`); await sleep(300);
+    await ev("document.getElementById('btn-maps').click()"); await sleep(300);
+    await ev(`document.querySelector('input[name=map-type][value=${kind}]').click()`);
+    await ev("document.querySelector('#sheet-maps .sheet-close').click()"); await sleep(300);
+    assert(await ev(`ReadyMap.mapType.get()==='${kind}' && ReadyMap.map.hasLayer(ReadyMap.mapType.layer()) && document.getElementById('btn-maps-label').textContent==='Depth'`), `${w}px ${kind} depth on`);
+    assert(await waitFor(`[...document.querySelectorAll('.leaflet-charts-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0&&i.src.includes('${host}')).length>0`, 30000), `${w}px ${kind} tiles loaded`);
+    assert(await ev(`(()=>{const t=document.querySelector('.leaflet-control-attribution').textContent;return t.includes(${JSON.stringify(credit)})&&t.includes('CC BY 4.0')&&t.includes('not for navigation')})()`), `${w}px ${kind} attribution shows`);
+    await sleep(1200); await shot(`ready-map-v153-${tag}-${w}-${kind}.png`);
+  }
+  // 1.5.3 Close-up depth lines (OpenSeaMap GEBCO 2021): hint when zoomed out, tiles at zoom 12.
+  await ev("ReadyMap.mapType.set('streets'); ReadyMap.map.setView([43.65,7.3],9,{animate:false})"); await sleep(300);
+  await ev("document.getElementById('btn-maps').click()"); await sleep(300);
+  await ev("document.getElementById('closeup-toggle').click()"); await sleep(300);
+  assert(await ev("ReadyMap.mapType.closeup.get() && !document.getElementById('closeup-hint').hidden && localStorage.getItem('readyMap.closeupContours.v1')==='true'"), `${w}px close-up lines on, zoom-in hint at zoom 9`);
+  assert(await ev("[...document.querySelectorAll('#sheet-maps fieldset.map-group legend')].filter(l=>l.getBoundingClientRect().width>0).map(l=>l.textContent.trim().split(/\\s/)[0]).join(',')").then(v=>/Map,Charts,Depth,Overlays/.test(v)), `${w}px Maps panel grouped (Map type, Charts, Depth, Overlays)`);
+  assert(await ev("document.documentElement.scrollWidth<=window.innerWidth+1"), `${w}px Maps panel has no sideways scroll`);
+  await shot(`ready-map-v153-${tag}-${w}-panel.png`);
+  await ev("document.querySelector('#sheet-maps .sheet-close').click()"); await sleep(300);
+  await ev("ReadyMap.map.setView([43.65,7.3],12,{animate:false})");
+  assert(await waitFor(`[...document.querySelectorAll('.leaflet-contours-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0&&i.src.includes('geoserver.openseamap.org')).length>0`, 30000), `${w}px close-up depth line tiles loaded at zoom 12`);
+  assert(await ev("(()=>{const t=document.querySelector('.leaflet-control-attribution').textContent;return t.includes('GEBCO 2021')&&t.includes('ODbL')&&t.includes('OpenStreetMap contributors')})() && document.getElementById('closeup-hint').hidden"), `${w}px close-up attribution shows, hint hidden`);
+  await sleep(1500); await shot(`ready-map-v153-${tag}-${w}-closeup.png`);
+  await ev("ReadyMap.mapType.closeup.set(false)");
+  assert(await ev("!ReadyMap.mapType.closeup.layer() && !document.querySelector('.leaflet-control-attribution').textContent.includes('GEBCO 2021')"), `${w}px close-up lines off`);
   // 1.5.2 Depth lines over two map types, overview zoom and detail zoom.
   await ev("document.getElementById('btn-maps').click()"); await sleep(300);
   await ev("document.getElementById('seamarks-toggle').checked && document.getElementById('seamarks-toggle').click()");
@@ -90,9 +116,9 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
     await ev(`ReadyMap.mapType.set('${kind}'); ReadyMap.map.setView([${lat},${lon}],${z},{animate:false})`);
     assert(await waitFor(linesDrawn, 30000), `${w}px depth lines drawn at zoom ${z} over ${kind}`);
     assert(await ev("(()=>{const t=document.querySelector('.leaflet-control-attribution').textContent;return t.includes('Depth lines')&&t.includes('GEBCO_2026 Grid')})()"), `${w}px depth line attribution at zoom ${z}`);
-    await sleep(800); await shot(`ready-map-v152-${tag}-${w}-contours-z${z}-${kind}.png`);
+    await sleep(800); await shot(`ready-map-v153-${tag}-${w}-contours-z${z}-${kind}.png`);
   }
-  // 1.5.2 Tap for depth on different map types (open ocean, a sound with no marine model, land below sea level).
+  // 1.5.3 Tap for depth on different map types (open ocean, a sound with no marine model, land below sea level).
   for (const [lat, lon, kind, want] of [[36, -40, 'nautical', true], [47.6, -122.4, 'topo', true], [36.25, -116.82, 'streets', false]]) {
     await ev(`ReadyMap.mapType.set('${kind}'); ReadyMap.map.setView([${lat},${lon}],9,{animate:false}); ReadyMap.map.fire('click',{latlng:L.latLng(${lat},${lon})})`);
     if (want) {
@@ -103,7 +129,7 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
       assert(await ev("!document.getElementById('point-wx').textContent.includes('depth from')"), `${w}px no depth on land below sea level (${lat},${lon})`);
     }
   }
-  await shot(`ready-map-v152-${tag}-${w}-tapdepth.png`);
+  await shot(`ready-map-v153-${tag}-${w}-tapdepth.png`);
   await ev("ReadyMap.mapType.contours.set(false); ReadyMap.mapType.set('streets')");
   // Full map keeps the Maps button usable.
   await ev("document.getElementById('btn-full-map').click()"); await sleep(600);
