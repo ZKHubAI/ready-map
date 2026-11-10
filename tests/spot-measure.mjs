@@ -62,7 +62,7 @@ assert.equal(ctx.state.selected.lat,8.8853);
 wx.state.cache['10.00,10.00']={lat:10,lon:10,marine:null,depthM:null,wx:null,at:Date.now()};
 ctx.state.selected={lat:10,lon:10};wx.update();
 assert.equal(ctx.$('spotwx-facts').children.length,0);assert(ctx.$('point-wx').hidden);
-for(const file of ['app.js','index.html','sw.js','README.md']) assert(readFileSync(new URL('../'+file,import.meta.url),'utf8').includes('1.5.3'));
+for(const file of ['app.js','index.html','sw.js','README.md']) assert(readFileSync(new URL('../'+file,import.meta.url),'utf8').includes('1.5.4'));
 assert.match(readFileSync(new URL('../styles.css',import.meta.url),'utf8'),/\.point-wx[^}]*white-space: normal/);
 // A failed optional depth service must not discard air or marine weather.
 ctx.OM_BEST={label:'best match'};
@@ -81,4 +81,4 @@ assert.match(ctx.$('point-wx').textContent,/81°F/);
 assert.match(ctx.$('point-wx').textContent,/Current 0.0 mph.*north \(0°\)/);
 assert(!ctx.$('point-wx').textContent.includes('Depth'));
 assert.equal(wx.state.cache['6.00,-88.00'].depthM,null);
-console.log('PASS marine parsing, current direction, depth, compact summaries, retained headings, land omissions and version 1.5.3');
+console.log('PASS marine parsing, current direction, depth, compact summaries, retained headings, land omissions and version 1.5.4');

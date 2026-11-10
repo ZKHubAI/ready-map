@@ -625,3 +625,29 @@ body.full-map .status-banner:not([hidden]) {
   z-index: 1050; max-height: 30%; overflow-y: auto; border-radius: 12px;
 }
 body.full-map .measure-panel { bottom: calc(84px + var(--safe-bottom)); }
+
+/* 1.5.4: small, dismissible note when the readable street map falls back. It sits between the
+   zoom buttons and the Full map / Maps buttons, never over them, and fades on its own. */
+.map-names-notice {
+  position: absolute; z-index: 900;
+  top: 10px; left: 62px; right: 122px;
+  max-width: 340px; margin: 0 auto;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 4px 4px 10px; border-radius: 10px;
+  background: rgba(255, 247, 237, 0.94); border: 1px solid #FDBA74; color: var(--ink);
+  font-size: 0.78rem; font-weight: 600; line-height: 1.25;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  opacity: 0; transition: opacity 0.35s ease;
+  pointer-events: auto;
+}
+.map-names-notice.is-showing { opacity: 1; }
+body.full-map .map-names-notice {
+  top: calc(10px + var(--safe-top)); left: calc(62px + var(--safe-left)); right: calc(122px + var(--safe-right));
+}
+.map-names-notice[hidden] { display: none; }
+.map-names-notice-close {
+  flex: 0 0 auto; min-width: 32px; min-height: 32px; padding: 0;
+  border: 0; border-radius: 8px; background: transparent; color: var(--ink);
+  font: inherit; font-size: 1.2rem; line-height: 1; cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) { .map-names-notice { transition: none; } }

@@ -49,6 +49,7 @@
 
   <main class="map-wrap">
     <div id="map" role="region" aria-label="Map. Tap the map to drop a pin."></div>
+    <div id="map-names-notice" class="map-names-notice" role="status" aria-live="polite" hidden><span id="map-names-notice-text"></span><button type="button" id="map-names-notice-close" class="map-names-notice-close" aria-label="Dismiss this note">&times;</button></div>
     <button type="button" id="btn-maps" class="map-maps" aria-haspopup="dialog" aria-controls="sheet-maps" aria-label="Map type: Street map. Change map type"><svg class="chip-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M12 3 2 8l10 5 10-5-10-5zM2 13l10 5 10-5M2 17.5l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/></svg><span id="btn-maps-label">Maps</span></button>
     <button type="button" id="btn-full-map" class="map-full-toggle" aria-pressed="false" aria-label="Full map. Hide map controls" aria-controls="point-card">Full map</button>
     <!-- 1.4.2 Radar loop on/off on the map: shown only when radar is on and has loop frames -->
@@ -789,7 +790,7 @@
         <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.5.3</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.5.4</span>. In an emergency, call 911.</p>
     </div>
   </section>
 

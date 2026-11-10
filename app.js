@@ -18,6 +18,7 @@
  *  15. Startup
  *  (4b. Map type, 1.5.0: topo, nautical chart, imagery, seamarks; 1.5.1 world depth; 1.5.2 Norway chart,
  *   depth contour lines and tap-for-depth from GEBCO; 1.5.3 Europe and Australia depth, close-up depth lines;
+ *   1.5.4 readable-map fallback only on real failure, small fading note, never over charts;
  *   live tiles and contour files are never cached)
  */
 (function () {
@@ -26,7 +27,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.5.3';
+  var VERSION = '1.5.4';
   // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
   // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
@@ -952,7 +953,81 @@
     layers.base._rmFallback = true;
     layers.base.addTo(state.map);
     layers.base.bringToBack();
-    setStatus('Readable map unavailable. Showing the original map with local names.', 'warn');
+    mapNamesNotice();
+  }
+
+  // 1.5.4: the "readable map unavailable" note is a small, dismissible note that fades on its own,
+  // and it only shows while the street map is showing (charts, topo, imagery and depth cover it).
+  var NAMES_NOTE_TEXT = 'Readable map unavailable. Showing local names.';
+  var NAMES_NOTE_MS = 5000;
+  var namesNote = { pending: false, shown: false, timer: null };
+  function hideMapNamesNotice() {
+    var n = $('map-names-notice');
+    clearTimeout(namesNote.timer); namesNote.timer = null;
+    if (!n || n.hidden) return;
+    n.classList.remove('is-showing');
+    setTimeout(function () { if (!n.classList.contains('is-showing')) n.hidden = true; }, 400);
+  }
+  /** Show the note now if the street map is showing; otherwise keep it for when it is. */
+  function mapNamesNotice() {
+    namesNote.pending = true;
+    syncMapNamesNotice();
+  }
+  /** Fit the note into the gap between the zoom buttons and the top-right map buttons (their
+   *  labels change, e.g. Full map / Restore controls); if the gap is too narrow, go just below them. */
+  function placeMapNamesNotice(n) {
+    var wrap = n.parentNode && n.parentNode.getBoundingClientRect();
+    if (!wrap) return;
+    var zoom = document.querySelector('.leaflet-control-zoom');
+    var zr = zoom ? zoom.getBoundingClientRect() : null;
+    var left = (zr && zr.width ? zr.right - wrap.left : 0) + 8;
+    var rightEdge = wrap.width, below = 0;
+    ['btn-full-map', 'btn-maps', 'btn-map-loop'].forEach(function (id) {
+      var b = $(id);
+      if (!b) return;
+      var r = b.getBoundingClientRect();
+      if (!r.width || r.top - wrap.top > 140) return;
+      rightEdge = Math.min(rightEdge, r.left - wrap.left - 8);
+      below = Math.max(below, r.bottom - wrap.top);
+    });
+    var top = (zr && zr.height ? zr.top - wrap.top : 10);
+    n.style.maxWidth = '340px';
+    if (rightEdge - left >= 170) {
+      n.style.top = top + 'px'; n.style.left = left + 'px'; n.style.right = (wrap.width - rightEdge) + 'px';
+    } else {
+      n.style.top = (Math.max(below, zr ? zr.bottom - wrap.top : 0) + 8) + 'px';
+      n.style.left = left + 'px'; n.style.right = '10px';
+    }
+  }
+  function syncMapNamesNotice() {
+    var n = $('map-names-notice');
+    if (!n) return;
+    var streets = (state.mapType || 'streets') === 'streets';
+    if (!streets) { hideMapNamesNotice(); return; }
+    if (!namesNote.pending || namesNote.shown) return;
+    if (!(layers.base && layers.base._rmFallback)) { namesNote.pending = false; return; }
+    namesNote.pending = false; namesNote.shown = true;
+    $('map-names-notice-text').textContent = NAMES_NOTE_TEXT;
+    n.hidden = false;
+    placeMapNamesNotice(n);
+    void n.offsetWidth;
+    n.classList.add('is-showing');
+    clearTimeout(namesNote.timer);
+    namesNote.timer = setTimeout(hideMapNamesNotice, NAMES_NOTE_MS);
+  }
+
+  var READABLE_STYLE_WAIT_MS = 30000;
+  var READABLE_REBUILD_GAP_MS = 120000;
+  var readableRebuiltAt = 0;
+  /** A lost WebGL canvas that did not come back: start the readable map again on a new canvas. */
+  function rebuildReadable(layer) {
+    if (layers.base !== layer) return;
+    readableRebuiltAt = Date.now();
+    try { state.map.removeLayer(layer); } catch (e) {
+      if (layer._container) L.DomUtil.remove(layer._container);
+    }
+    layers.base = null;
+    setMapNames(state.mapNames, false);
   }
 
   /** Switch the base map. save: remember the choice on this device. */
@@ -972,31 +1047,57 @@
       try {
         base.addTo(state.map);
         if (base.bringToBack) base.bringToBack();
-        if (base._rmFallback) setStatus('Readable map unavailable. Showing the original map with local names.', 'warn');
+        if (base._rmFallback) mapNamesNotice();
         if (base.getMaplibreMap) {
           var gl = base.getMaplibreMap();
-          var timer = setTimeout(function () { fallbackBase(base); }, 25000);
-          var lostTimer = null;
+          // 1.5.4: only a style that never arrives counts as a failure. A slow phone connection can
+          // take longer than 25 s to finish the first full render ('load'), and the street map
+          // under a chart loads more slowly still, so slow tiles no longer switch maps.
+          var timer = setTimeout(function () {
+            timer = null;
+            if (gl && typeof gl.isStyleLoaded === 'function' && styleSeen) return;
+            fallbackBase(base);
+          }, READABLE_STYLE_WAIT_MS);
+          var styleSeen = false;
+          var lostTimer = null, contextLost = false;
           function clearWatch() {
-            clearTimeout(timer);
+            if (timer) { clearTimeout(timer); timer = null; }
             if (lostTimer) { clearTimeout(lostTimer); lostTimer = null; }
           }
           if (gl) {
             gl.once('load', clearWatch);
+            gl.on('styledata', function () { styleSeen = true; });
             base.once('remove', clearWatch);
             var canvas = gl.getCanvas && gl.getCanvas();
             if (canvas) {
-              // Phones often fire contextlost when Full map resizes the canvas.
-              // Allow the browser to restore instead of switching maps immediately.
+              // Phones often fire contextlost when Full map resizes the canvas, when the page is in the
+              // background, or when Safari is short of graphics memory (big chart images on top).
+              // Wait for the browser to restore it; if it does not, rebuild the readable map once on a
+              // fresh canvas before falling back to the original map.
               canvas.addEventListener('webglcontextlost', function (ev) {
                 if (ev && ev.preventDefault) ev.preventDefault();
+                contextLost = true;
                 if (lostTimer) return;
+                armLost();
+              });
+              function armLost() {
                 lostTimer = setTimeout(function () {
                   lostTimer = null;
-                  fallbackBase(base);
+                  if (layers.base !== base || !contextLost) return;
+                  if (document.hidden) {
+                    document.addEventListener('visibilitychange', function again() {
+                      if (document.hidden) return;
+                      document.removeEventListener('visibilitychange', again);
+                      if (layers.base === base && contextLost && !lostTimer) armLost();
+                    });
+                    return;
+                  }
+                  if (Date.now() - readableRebuiltAt > READABLE_REBUILD_GAP_MS) rebuildReadable(base);
+                  else fallbackBase(base);
                 }, 4000);
-              });
+              }
               canvas.addEventListener('webglcontextrestored', function () {
+                contextLost = false;
                 if (lostTimer) { clearTimeout(lostTimer); lostTimer = null; }
                 try { if (typeof gl.resize === 'function') gl.resize(); } catch (err) {}
               });
@@ -1120,6 +1221,7 @@
     var radios = document.querySelectorAll('input[name="map-type"]');
     Array.prototype.forEach.call(radios, function (r) { r.checked = r.value === kind; });
     syncMapsButton();
+    syncMapNamesNotice();
   }
 
   function setSeamarks(on, save) {
@@ -6349,6 +6451,7 @@
     $('seamarks-toggle').addEventListener('change', function (e) { setSeamarks(e.target.checked, true); });
     $('contours-toggle').addEventListener('change', function (e) { setContours(e.target.checked, true); });
     $('closeup-toggle').addEventListener('change', function (e) { setCloseup(e.target.checked, true); });
+    $('map-names-notice-close').addEventListener('click', hideMapNamesNotice);
 
     $('btn-compass').addEventListener('click', function (e) { startCompass(e.currentTarget); });
     $('btn-compass-stop').addEventListener('click', function () { closeSheet('sheet-compass'); });

@@ -7,7 +7,7 @@ U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperatur
 Layers that only work in the United States say "U.S. only" in their names. The **Maps** button switches to a topo map,
 a NOAA nautical chart, a Kartverket chart of Norway, GEBCO world depth, EMODnet Europe depth, AusSeabed Australia depth or aerial imagery, can add close-up depth lines, can add depth lines, and can add OpenSeaMap seamarks.
 
-Version 1.5.3.
+Version 1.5.4.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -60,6 +60,31 @@ https://<host>/ready-map/?lat=39.8283&lon=-98.5795&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.5.4
+
+- **Fix: "Readable map unavailable" no longer appears by mistake.** A phone report (iPhone, Full map,
+  Kartverket Norway chart over the Norwegian Sea) showed the orange banner over the chart. Two causes on
+  our side, both reproduced in a test browser:
+  1. The readable street map fell back if its first complete render (MapLibre `load`) took longer than
+     25 s. On a slow phone connection that is normal, especially with a chart loading at the same time
+     over a wide, zoomed-out area. Now only a style that never arrives (30 s) counts as a failure; once
+     the style is in, slow tiles just keep loading.
+  2. iOS Safari drops WebGL canvases when it is short of graphics memory or the page goes to the
+     background, and does not always give them back. Before, 4 s without a restore meant a fallback.
+     Now the app waits until the page is visible again, then rebuilds the readable map once on a fresh
+     canvas; it falls back only if that happens again within 2 minutes.
+  The allowed-sources list (CSP) was checked and was not the cause: 1.5.0 to 1.5.3 only added hosts, and
+  every host the readable style uses (tiles.openfreemap.org) was already allowed.
+- **The note is small now.** It is no longer the full-width orange banner. It is a small note
+  between the zoom buttons and the Full map / Maps buttons (or just below them on narrow screens), with a
+  close (×) button, and it fades out on its own after 5 s. It never shows while a chart, topo, imagery or
+  depth map is selected, since street names are not what is showing then; it shows once when you go back
+  to the street map.
+- New test `tests/names-fallback.mjs`: lost canvas over the Norway chart in Full map (rebuild first, then
+  fallback), no note over chart, topo, imagery or depth, the note on the street map is small, clear of the
+  map buttons, fades and can be dismissed, and a slow connection (over 40 s to load) does not fall back.
+  `tests/charts.mjs` also checks there is no readable-map banner over each map type.
 
 ## Changes in 1.5.3
 

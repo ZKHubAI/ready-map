@@ -44,7 +44,7 @@ await send("Page.navigate", { url: base + "index.html?lat=39.7456&lon=-97.0892&z
 await sleep(3000);
 
 // 1.4.5 Full map at a 390px mobile viewport. Never activate emergency actions.
-assert(await ev("ReadyMap.version==='1.5.3'"), 'app reports 1.5.3');
+assert(await ev("ReadyMap.version==='1.5.4'"), 'app reports 1.5.4');
 assert(await ev("!ReadyMap.fullMap.get() && !document.body.classList.contains('full-map')"), 'full map defaults off');
 const shot = async (path) => {
   const result = await send('Page.captureScreenshot', {format:'png', captureBeyondViewport:false});
@@ -55,7 +55,7 @@ await shot(process.env.READY_MAP_CHROME_SHOT || '/workspace/ready-map-v145-chrom
 const mapBefore = await ev("ReadyMap.map.getSize().y");
 await $click('#btn-full-map'); await sleep(500);
 assert(await ev("ReadyMap.fullMap.get() && localStorage.getItem('readyMap.fullMap.v1')==='true'"), 'full map enabled and saved');
-assert(await ev("ReadyMap.version==='1.5.3' && ReadyMap.mapNames.get()==='readable' && !ReadyMap.mapNames.layer()._rmFallback && !!ReadyMap.mapNames.layer().getMaplibreMap"), 'full map keeps the readable map');
+assert(await ev("ReadyMap.version==='1.5.4' && ReadyMap.mapNames.get()==='readable' && !ReadyMap.mapNames.layer()._rmFallback && !!ReadyMap.mapNames.layer().getMaplibreMap"), 'full map keeps the readable map');
 assert(await ev("['.app-header','.chips','.point-card'].every(s=>getComputedStyle(document.querySelector(s)).display==='none')"), 'chrome hidden');
 assert(await ev("(()=>{const r=document.querySelector('#map').getBoundingClientRect();return r.top===0 && r.left===0 && r.width===innerWidth && Math.abs(r.height-innerHeight)<2 && ReadyMap.map.getSize().y===Math.round(r.height)})()"), 'map and Leaflet fill viewport');
 assert(await ev(`ReadyMap.map.getSize().y > ${mapBefore}`), 'map grows');

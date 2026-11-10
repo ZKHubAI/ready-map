@@ -32,7 +32,7 @@
  */
 'use strict';
 
-var VERSION = '1.5.3';
+var VERSION = '1.5.4';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js
