@@ -5,9 +5,9 @@ phone's own GPS, shows your spot on a world map with easy-to-read place names (o
 keeps the map parts you have viewed for offline use, and can show live weather (rain radar, clouds,
 U.S. warnings, world disaster alerts) and ocean layers (currents, sea temperature, depth, marine zones).
 Layers that only work in the United States say "U.S. only" in their names. The **Maps** button switches to a topo map,
-a NOAA nautical chart or aerial imagery, and can add OpenSeaMap seamarks.
+a NOAA nautical chart, GEBCO world depth or aerial imagery, and can add OpenSeaMap seamarks.
 
-Version 1.5.0.
+Version 1.5.1.
 
 Plain HTML, CSS and JavaScript. No build step, no npm, no CDN. Only an anonymous, cookie-free GoatCounter visit count (see 1.4.1). Leaflet 1.9.4 is
 vendored in `vendor/leaflet/`. All paths are relative (`./`), so it works under any sub-path.
@@ -60,6 +60,21 @@ https://<host>/ready-map/?lat=39.8283&lon=-98.5795&label=Meeting%20spot&zoom=15
 
 Bad values show a friendly message and the normal map. The **More → Copy link** button builds
 the same kind of link for the current point.
+
+## Changes in 1.5.1
+
+- New **World depth (GEBCO, worldwide)** option in the Maps panel: ocean depth shading for the whole world
+  (land is shaded by height). GEBCO WMS 1.3.0 `https://wms.gebco.net/mapserv`, layer `GEBCO_LATEST`
+  (shaded relief), EPSG:3857, PNG, native to zoom 10 and scaled above. Reference only: no channels,
+  hazards or harbor detail, **not for navigation**, needs a signal.
+- GEBCO covers land and sea, so it hides the street map; the street map stays underneath only as a fallback.
+  The Seamarks overlay still draws on top.
+- Attribution as GEBCO requests: "Imagery reproduced from the GEBCO_2026 Grid, GEBCO Compilation Group (2026)
+  GEBCO 2026 Grid (doi:10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa)". The service reports GEBCO_2026, so the existing
+  Weather → World sea depth credit now says 2026 too (it was 2024).
+- Not cached: wms.gebco.net is not in `sw.js` TILE_HOSTS. Offline map and About text updated.
+  (wms.gebco.net was already in the page's allowed image sources for World sea depth.)
+- `tests/charts.mjs` now also checks World depth, and World depth with Seamarks on top.
 
 ## Changes in 1.5.0
 
@@ -412,4 +427,4 @@ Map data © OpenStreetMap contributors (ODbL). Leaflet © Volodymyr Agafonkin an
 RainViewer. World clouds: NOAA/NESDIS GMGSI via NOAA nowCOAST. World disaster alerts: GDACS
 (EC JRC + UN OCHA). Weather news: NOAA / National Weather Service (local offices, NHC, CPHC) and GDACS. Local weather: NOAA / National Weather Service; outside the U.S. Weather data by Open-Meteo.com (CC BY 4.0). Ocean: NOAA nowCOAST (RTOFS, Great Lakes OFS, NASA SPoRT SST), NOAA Office of
 Coast Survey ENC charts, NOAA / National Weather Service marine zones (public domain), NOAA
-CoastWatch blended geostrophic currents, GEBCO Compilation Group (2024) GEBCO Grid.
+CoastWatch blended geostrophic currents, GEBCO Compilation Group (2026) GEBCO 2026 Grid.

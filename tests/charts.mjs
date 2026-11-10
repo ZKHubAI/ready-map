@@ -1,4 +1,4 @@
-// Dev-only browser check for 1.5.0 map types (not part of the app). Needs Chrome and network.
+// Dev-only browser check for 1.5.1 map types (not part of the app). Needs Chrome and network.
 // usage: node tests/charts.mjs http://127.0.0.1:8000/   (screenshots go to READY_MAP_SHOT_DIR or /workspace)
 import { spawn } from "node:child_process";
 import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
@@ -31,13 +31,13 @@ const assert = (ok, message) => { if (ok !== true) { console.error('FAIL:', mess
 const shot = async (name) => { const r = await send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(shotDir, name), Buffer.from(r.result.data, 'base64')); };
 const waitFor = async (expr, ms = 20000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(300); } return ev(expr); };
 
-const KINDS = { topo: 'USGS The National Map', opentopo: 'OpenTopoMap', nautical: 'NOAA Office of Coast Survey', imagery: 'Orthoimagery' };
+const KINDS = { topo: 'USGS The National Map', opentopo: 'OpenTopoMap', nautical: 'NOAA Office of Coast Survey', worlddepth: 'GEBCO_2026', imagery: 'Orthoimagery' };
 await send("Runtime.enable"); await send("Page.enable");
 for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
   await send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile });
   await send("Page.navigate", { url: base + "index.html?lat=47.6&lon=-122.4&zoom=12&label=Chart%20check" });
   await sleep(3500);
-  assert(await ev("ReadyMap.version==='1.5.0' && document.getElementById('app-version').textContent==='1.5.0'"), `${w}px version 1.5.0`);
+  assert(await ev("ReadyMap.version==='1.5.1' && document.getElementById('app-version').textContent==='1.5.1'"), `${w}px version 1.5.1`);
   assert(await ev("ReadyMap.mapType.get()==='streets' && !ReadyMap.mapType.layer() && !!ReadyMap.mapNames.layer()"), `${w}px defaults to street map`);
   assert(await ev("(()=>{const r=document.getElementById('btn-maps').getBoundingClientRect();return r.width>=44&&r.height>=44&&r.right<=innerWidth})()"), `${w}px Maps button visible and tappable`);
   for (const [kind, credit] of Object.entries(KINDS)) {
@@ -48,7 +48,7 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
     assert(await ev(`ReadyMap.mapType.get()==='${kind}' && ReadyMap.map.hasLayer(ReadyMap.mapType.layer()) && ReadyMap.map.hasLayer(ReadyMap.mapNames.layer())`), `${w}px ${kind} on, street map kept underneath`);
     assert(await waitFor(`[...document.querySelectorAll('.leaflet-charts-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0).length>0`), `${w}px ${kind} tiles loaded`);
     assert(await ev(`document.querySelector('.leaflet-control-attribution').textContent.includes(${JSON.stringify(credit)})`), `${w}px ${kind} attribution shows`);
-    await sleep(1200); await shot(`ready-map-v150-${tag}-${w}-${kind}.png`);
+    await sleep(1200); await shot(`ready-map-v151-${tag}-${w}-${kind}.png`);
   }
   await ev("document.getElementById('btn-maps').click()"); await sleep(300);
   await ev("document.getElementById('seamarks-toggle').click()");
@@ -58,7 +58,17 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]]) {
   assert(await waitFor(`[...document.querySelectorAll('.leaflet-seamarks-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0).length>0`), `${w}px seamark tiles loaded`);
   assert(await ev("document.querySelector('.leaflet-control-attribution').textContent.includes('OpenSeaMap') && !document.querySelector('.leaflet-control-attribution').textContent.includes('Coast Survey')"), `${w}px seamark attribution shows, chart credit removed`);
   assert(await ev("localStorage.getItem('readyMap.mapType.v1')==='streets' && localStorage.getItem('readyMap.seamarks.v1')==='true'"), `${w}px choices saved`);
-  await shot(`ready-map-v150-${tag}-${w}-seamarks.png`);
+  await shot(`ready-map-v151-${tag}-${w}-seamarks.png`);
+  // 1.5.1 World depth with Seamarks on top, away from U.S. chart coverage (English Channel).
+  await ev("ReadyMap.map.setView([50.1,-1.5],8,{animate:false})"); await sleep(500);
+  await ev("document.getElementById('btn-maps').click()"); await sleep(300);
+  await ev("document.querySelector('input[name=map-type][value=worlddepth]').click()");
+  await ev("document.querySelector('#sheet-maps .sheet-close').click()"); await sleep(300);
+  assert(await ev("ReadyMap.mapType.get()==='worlddepth' && ReadyMap.map.hasLayer(ReadyMap.mapType.layer()) && ReadyMap.mapType.seamarks.get() && ReadyMap.map.hasLayer(ReadyMap.mapType.seamarks.layer())"), `${w}px world depth with seamarks on top`);
+  assert(await waitFor(`[...document.querySelectorAll('.leaflet-charts-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0&&i.src.includes('wms.gebco.net')).length>0 && [...document.querySelectorAll('.leaflet-seamarks-pane img.leaflet-tile')].filter(i=>i.complete&&i.naturalWidth>0).length>0`, 30000), `${w}px world depth and seamark tiles loaded worldwide`);
+  assert(await ev("(()=>{const t=document.querySelector('.leaflet-control-attribution').textContent;return t.includes('Imagery reproduced from the GEBCO_2026 Grid')&&t.includes('OpenSeaMap')&&t.includes('Not for navigation')})()"), `${w}px GEBCO and seamark attribution show`);
+  assert(await ev("document.getElementById('btn-maps-label').textContent==='Depth'"), `${w}px Maps button says Depth`);
+  await sleep(1500); await shot(`ready-map-v151-${tag}-${w}-worlddepth-seamarks.png`);
   // Full map keeps the Maps button usable.
   await ev("document.getElementById('btn-full-map').click()"); await sleep(600);
   assert(await ev("ReadyMap.fullMap.get() && (()=>{const r=document.getElementById('btn-maps').getBoundingClientRect();return r.width>0&&r.bottom<innerHeight})()"), `${w}px Maps button shown in Full map`);

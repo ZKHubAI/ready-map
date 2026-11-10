@@ -129,6 +129,7 @@
         <label><input type="radio" name="map-type" value="topo"> Topo map (USGS, U.S. only)</label>
         <label><input type="radio" name="map-type" value="opentopo"> Topo map (OpenTopoMap, worldwide)</label>
         <label><input type="radio" name="map-type" value="nautical"> Nautical chart (NOAA, U.S. waters)</label>
+        <label><input type="radio" name="map-type" value="worlddepth"> World depth (GEBCO, worldwide)</label>
         <label><input type="radio" name="map-type" value="imagery"> Aerial imagery (USGS, U.S. only)</label>
       </fieldset>
       <fieldset class="seg">
@@ -136,8 +137,8 @@
         <label class="check"><input type="checkbox" id="seamarks-toggle"> Seamarks: buoys, lights, beacons (OpenSeaMap, worldwide)</label>
       </fieldset>
       <p class="map-note" id="charts-note"><strong>For reference only.</strong> These maps and charts do not replace official charts, a compass, or a marine chart plotter. They need a signal to load live map pieces and are not saved for offline use.</p>
-      <p class="hint">Topo maps show hills with contour lines and trails for land navigation. The nautical chart shows depths, buoys and channels for boating. Aerial imagery is photos taken from above, not a live satellite view. Outside a map's area you see the street map instead. Place names in More tools change only the street map.</p>
-      <p class="fine">Topo: USGS The National Map and OpenTopoMap (OpenStreetMap data). Chart: NOAA Office of Coast Survey ENC chart display. Imagery: USGS The National Map Orthoimagery. Seamarks: OpenSeaMap. Credits show at the bottom of the map.</p>
+      <p class="hint">Topo maps show hills with contour lines and trails for land navigation. The nautical chart shows depths, buoys and channels for boating. World depth is ocean depth shading for the whole world (land is shaded by height); it has no channels, hazards or harbor detail and is not for navigation. Aerial imagery is photos taken from above, not a live satellite view. Outside a map's area you see the street map instead. Place names in More tools change only the street map.</p>
+      <p class="fine">Topo: USGS The National Map and OpenTopoMap (OpenStreetMap data). Chart: NOAA Office of Coast Survey ENC chart display. World depth: imagery reproduced from the GEBCO_2026 Grid, GEBCO Compilation Group (2026) GEBCO 2026 Grid. Imagery: USGS The National Map Orthoimagery. Seamarks: OpenSeaMap. Credits show at the bottom of the map.</p>
     </div>
   </section>
 
@@ -291,7 +292,7 @@
       <p id="save-count" class="sheet-status" role="status" aria-live="polite"></p>
       <button type="button" id="btn-save-clear" class="btn btn-wide">Clear saved map</button>
       <p id="save-status" class="sheet-status" role="status" aria-live="polite"></p>
-      <p class="fine">Map pieces come from OpenFreeMap (Easy to read names) or OpenStreetMap (Local names). This app only keeps what you view; it never downloads whole areas ahead of time. Old pieces are removed first when it is full. Weather and ocean layers, and the topo, chart, imagery and seamark maps (Maps button), are never saved.</p>
+      <p class="fine">Map pieces come from OpenFreeMap (Easy to read names) or OpenStreetMap (Local names). This app only keeps what you view; it never downloads whole areas ahead of time. Old pieces are removed first when it is full. Weather and ocean layers, and the topo, chart, world depth, imagery and seamark maps (Maps button), are never saved.</p>
     </div>
   </section>
 
@@ -618,7 +619,7 @@
               <span style="left:0%">Shallow</span><span style="left:100%">Deep</span>
             </div>
             <p class="legend-text">Light blue = shallow water. Dark blue = deep water. Land is shown in green and brown colors.</p>
-            <p class="legend-text">From the GEBCO world map of the sea floor (GEBCO Compilation Group (2024) GEBCO Grid). Covers the whole world.</p>
+            <p class="legend-text">From the GEBCO world map of the sea floor (GEBCO Compilation Group (2026) GEBCO 2026 Grid). Covers the whole world.</p>
             <p class="legend-text"><strong>Not for navigation.</strong></p>
           </details>
         </div>
@@ -713,7 +714,7 @@
           <ul>
             <li>OpenFreeMap (tiles.openfreemap.org), for detailed map tiles, names, fonts and symbols, or OpenStreetMap (tile.openstreetmap.org) if you pick Local names in More tools.</li>
             <li>Overpass API, and as backups Photon (komoot) and Nominatim (OpenStreetMap), only when you tap a Find nearby button. Results are kept on this device for 24 hours.</li>
-            <li>Map type (Maps button on the map), only when you pick that map: USGS The National Map (basemap.nationalmap.gov) for the USGS topo map and aerial imagery, OpenTopoMap (tile.opentopomap.org) for the worldwide topo map, NOAA Office of Coast Survey (gis.charttools.noaa.gov) for the nautical chart, and OpenSeaMap (tiles.openseamap.org) for seamarks. They see the map area you are looking at, never your GPS spot.</li>
+            <li>Map type (Maps button on the map), only when you pick that map: USGS The National Map (basemap.nationalmap.gov) for the USGS topo map and aerial imagery, OpenTopoMap (tile.opentopomap.org) for the worldwide topo map, NOAA Office of Coast Survey (gis.charttools.noaa.gov) for the nautical chart, GEBCO (wms.gebco.net) for world depth, and OpenSeaMap (tiles.openseamap.org) for seamarks. They see the map area you are looking at, never your GPS spot.</li>
             <li>NOAA / National Weather Service, only when you turn on a weather layer.</li>
             <li>NOAA ocean services, only when you turn on an Ocean layer: NOAA nowCOAST (nowcoast.noaa.gov) for currents and sea temperature, NOAA Office of Coast Survey charts (gis.charttools.noaa.gov) for depth lines, and the National Weather Service map server (mapservices.weather.noaa.gov) for marine zones. They see the map area you are looking at.</li>
             <li>RainViewer, for world radar outside the U.S. (or when you pick World radar), and if NOAA radar does not work.</li>
@@ -756,7 +757,8 @@
         <li>World clouds: NOAA/NESDIS Global Mosaic of Geostationary Satellite Imagery (GMGSI), via NOAA nowCOAST. Public domain.</li>
         <li>World disaster alerts: <a href="https://www.gdacs.org/" target="_blank" rel="noopener noreferrer">GDACS</a> (European Commission Joint Research Centre and UN OCHA).</li>
         <li>World currents: <a href="https://coastwatch.noaa.gov/" target="_blank" rel="noopener noreferrer">NOAA CoastWatch</a> blended near-real-time geostrophic currents. Not for navigation.</li>
-        <li>World sea depth: <a href="https://www.gebco.net/" target="_blank" rel="noopener noreferrer">GEBCO</a> Compilation Group (2024) GEBCO Grid. Not for navigation.</li>
+        <li>World sea depth: <a href="https://www.gebco.net/" target="_blank" rel="noopener noreferrer">GEBCO</a> Compilation Group (2026) GEBCO 2026 Grid. Not for navigation.</li>
+        <li>World depth map (Maps button): imagery reproduced from the GEBCO_2026 Grid, GEBCO Compilation Group (2026) GEBCO 2026 Grid (doi:10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa). Not for navigation.</li>
         <li>Ocean currents: NOAA nowCOAST (NWS/NCEP Global RTOFS and NOS Great Lakes forecast models). Sea temperature: NASA SPoRT satellite composite via NOAA nowCOAST. Public domain.</li>
         <li>Depth lines: NOAA Office of Coast Survey electronic nautical charts (ENC). Not for navigation.</li>
         <li>Marine zones: NOAA / National Weather Service.</li>
@@ -769,7 +771,7 @@
         <li>Country lookup for the spot: <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer">BigDataCloud</a> free reverse geocoding.</li>
       </ul>
       <p>See a mistake on the map? <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">Report a map issue</a> to OpenStreetMap.</p>
-      <p class="fine">Version <span id="app-version">1.5.0</span>. In an emergency, call 911.</p>
+      <p class="fine">Version <span id="app-version">1.5.1</span>. In an emergency, call 911.</p>
     </div>
   </section>
 

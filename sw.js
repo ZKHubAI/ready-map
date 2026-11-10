@@ -22,11 +22,12 @@
  *   1.5.0 map type hosts are never cached either: basemap.nationalmap.gov (USGS topo and imagery),
  *   tile.opentopomap.org, gis.charttools.noaa.gov (NOAA chart display) and tiles.openseamap.org (seamarks).
  *   They need signal and are not part of the offline map.
+ *   1.5.1 World depth (wms.gebco.net, GEBCO_LATEST) is never cached either.
  *   Only same-origin app files and TILE_HOSTS tiles are ever cached.
  */
 'use strict';
 
-var VERSION = '1.5.0';
+var VERSION = '1.5.1';
 var SHELL_CACHE = 'ready-map-shell-' + VERSION;
 var TILE_CACHE = 'ready-map-tiles-v1';   // must match app.js
 var MAX_TILES = 500;                     // must match MAX_VIEWED_TILES in app.js

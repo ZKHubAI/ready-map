@@ -16,7 +16,7 @@
  *  14. Weather overlays (radar, satellite, warnings, world disaster alerts) + Ocean layers
  *      (currents, sea temperature, depth lines, marine zones, world currents, world sea depth)
  *  15. Startup
- *  (4b. Map type, 1.5.0: topo, nautical chart, imagery, seamarks; live tiles only, never cached)
+ *  (4b. Map type, 1.5.0: topo, nautical chart, imagery, seamarks; 1.5.1 world depth; live tiles only, never cached)
  */
 (function () {
   'use strict';
@@ -24,7 +24,7 @@
   // ---------------------------------------------------------------------------
   // 1. Constants
   // ---------------------------------------------------------------------------
-  var VERSION = '1.5.0';
+  var VERSION = '1.5.1';
   // Detailed OSM-based streets with readable/bilingual labels; exact OSM Carto remains optional.
   // Only viewed resources are cached (500 items shared by both maps); never prefetch an area.
   var BASEMAPS = {
@@ -52,7 +52,7 @@
   var GMGSI_ATTRIBUTION = 'World clouds: <a href="https://www.nesdis.noaa.gov/">NOAA/NESDIS</a> GMGSI via NOAA nowCOAST';
   var GDACS_ATTRIBUTION = 'Disaster alerts: <a href="https://www.gdacs.org/">GDACS</a>';
   var COASTWATCH_ATTRIBUTION = 'World currents: <a href="https://coastwatch.noaa.gov/">NOAA CoastWatch</a> (not for navigation)';
-  var GEBCO_ATTRIBUTION = 'Sea depth: <a href="https://www.gebco.net/">GEBCO Compilation Group (2024) GEBCO Grid</a>';
+  var GEBCO_ATTRIBUTION = 'Sea depth: <a href="https://www.gebco.net/">GEBCO Compilation Group (2026) GEBCO 2026 Grid</a>';
   // Must match names in sw.js. SAVED_CACHE is the old (1.0.0) prefetch cache; it is only
   // deleted now (sw.js removes it on activate, "Clear saved map" removes it too).
   var SAVED_CACHE = 'ready-map-saved-v1';
@@ -1011,7 +1011,7 @@
   // Topo, nautical chart and imagery are drawn above the street map, which stays underneath,
   // so places outside a chart's coverage still show streets. Live tiles only: none of these
   // hosts are in sw.js TILE_HOSTS, so they are never cached and need signal to load.
-  var MAP_TYPE_KEY = 'readyMap.mapType.v1';      // 'streets' | 'topo' | 'opentopo' | 'nautical' | 'imagery'
+  var MAP_TYPE_KEY = 'readyMap.mapType.v1';      // 'streets' | 'topo' | 'opentopo' | 'nautical' | 'worlddepth' | 'imagery'
   var SEAMARKS_KEY = 'readyMap.seamarks.v1';     // 'true' | 'false'
   var NOAA_CHART_WMS = 'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer';
   var MAP_TYPES = {
@@ -1033,6 +1033,16 @@
       wms: NOAA_CHART_WMS,
       layers: '0,1,2,3,4,5,6,7,8,9,10,11,12',
       attribution: 'Chart: <a href="https://nauticalcharts.noaa.gov/">NOAA Office of Coast Survey</a> ENC chart display (reference only, not for navigation)'
+    },
+    // 1.5.1 GEBCO shaded relief. Opaque over land and sea worldwide; the street map stays underneath
+    // only as a fallback if GEBCO does not answer. GEBCO is a 15 arc-second grid, so zoom 10 is native.
+    worlddepth: {
+      label: 'World depth (GEBCO, worldwide)',
+      wms: 'https://wms.gebco.net/mapserv',
+      layers: 'GEBCO_LATEST',
+      transparent: false,
+      maxNativeZoom: 10,
+      attribution: 'Depth: Imagery reproduced from the GEBCO_2026 Grid, <a href="https://www.gebco.net/">GEBCO Compilation Group (2026) GEBCO 2026 Grid</a> (doi:10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa). Not for navigation'
     },
     imagery: {
       label: 'Aerial imagery (USGS, U.S. only)',
@@ -1057,8 +1067,8 @@
     var p = MAP_TYPES[kind];
     if (p.wms) {
       return L.tileLayer.wms(p.wms, {
-        layers: p.layers, styles: '', format: 'image/png', transparent: true, version: '1.3.0',
-        tileSize: 256, maxZoom: 19, pane: 'charts', attribution: p.attribution,
+        layers: p.layers, styles: '', format: 'image/png', transparent: p.transparent !== false, version: '1.3.0',
+        tileSize: 256, maxZoom: 19, maxNativeZoom: p.maxNativeZoom, pane: 'charts', attribution: p.attribution,
         updateWhenIdle: true, keepBuffer: 1
       });
     }
@@ -1113,7 +1123,7 @@
     b.classList.toggle('is-on', !!(on || state.seamarks));
     var name = MAP_TYPES[state.mapType || 'streets'].label + (state.seamarks ? ', seamarks on' : '');
     b.setAttribute('aria-label', 'Map type: ' + name + '. Change map type');
-    if (lbl) lbl.textContent = on ? ({ topo: 'Topo', opentopo: 'Topo', nautical: 'Chart', imagery: 'Imagery' })[state.mapType] : 'Maps';
+    if (lbl) lbl.textContent = on ? ({ topo: 'Topo', opentopo: 'Topo', nautical: 'Chart', worlddepth: 'Depth', imagery: 'Imagery' })[state.mapType] : 'Maps';
   }
 
   function initMap() {
@@ -4233,7 +4243,7 @@
       // GEBCO grid: does not change, so there is no time list.
       removeOceanLayers(ocean.worlddepth);
       addOceanLayer('worlddepth', gen, oceanWms(GEBCO_WMS, GEBCO_LAYER, null, opacity('opacity-worlddepth'), GEBCO_ATTRIBUTION, { zIndex: 0 }));
-      oceanTime('worlddepth', 'GEBCO 2024 world sea floor map (does not change)');
+      oceanTime('worlddepth', 'GEBCO 2026 world sea floor map (does not change)');
       oceanNote('worlddepth', 'Covers the whole world. Near U.S. coasts, Depth lines have more detail.');
     }
 
@@ -6062,7 +6072,7 @@
       r.addEventListener('change', function () { if (r.checked) setMapNames(r.value, true); });
     });
 
-    // 1.5.0: Map type (street, topo, nautical chart, imagery) and seamarks, remembered on this device
+    // 1.5.0: Map type (street, topo, nautical chart, world depth, imagery) and seamarks, remembered on this device
     $('btn-maps').addEventListener('click', function (e) {
       if ($('sheet-maps').hidden) openSheet('sheet-maps', e.currentTarget); else closeSheet('sheet-maps');
     });
